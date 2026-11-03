@@ -199,7 +199,7 @@
 
   /* ---------- Modal, panel lateral, avisos */
   .ov { position: fixed; inset: 0; z-index: 50; background: rgba(15,23,42,.38); backdrop-filter: blur(3px); display: flex; justify-content: center; align-items: flex-start; padding: 7vh 16px; overflow: auto; animation: fade .2s both; }
-  .ov.out { animation: fadeOut .18s both; } @keyframes fade { from { opacity: 0; } } @keyframes fadeOut { to { opacity: 0; } }
+  .ov.out { animation: fadeOut .18s both; pointer-events: none; } @keyframes fade { from { opacity: 0; } } @keyframes fadeOut { to { opacity: 0; } }
   .modal { background: #fff; border-radius: 20px; width: 100%; max-width: 560px; box-shadow: 0 30px 70px rgba(15,23,42,.3); animation: aparecer .3s var(--ease) both; }
   .modal.lg { max-width: 860px; }
   @keyframes aparecer { from { opacity: 0; transform: translateY(16px) scale(.96); } to { opacity: 1; transform: none; } }
@@ -330,7 +330,7 @@ var NOMINA = [
   ['PLAYA', '224', 'Zarate Jennifer', 1], ['PLAYA', '226', 'Feroglio Facundo', 1], ['PLAYA', '227', 'Garcia Bruno', 1],
 ];
 function nominaInicial() {
-  return NOMINA.map(function (r) { return { id: 'P-E4-' + r[0] + '-' + r[1], nombre: r[2], legajo: r[1], s: r[0], activo: !!r[3], alta: '2026-10-01', baja: r[3] ? '' : '2026-10-01' }; });
+  return NOMINA.map(function (r) { return { id: 'P-E4-' + r[0] + '-' + r[1], nombre: r[2], legajo: r[1], s: r[0], activo: !!r[3], alta: '2026-10-01', baja: r[3] ? '' : '2026-09-30' }; });
 }
 function estadoInicial() {
   return {
@@ -344,6 +344,7 @@ function estadoInicial() {
     eventos: [],    // propinas como movimientos que nunca se borran: alta {id,t,f,p,c,ts,por,quien} y corrección {id,t:'corr',ref,p,pAntes,c,antes,ts,quien,motivo}
     cargas: {},     // se arma desde "eventos": id -> {k,f,s,p,c,an,cr,md,por,quien,h:[[ts,antes,despues,quien,motivo]]}
     entregas: [],   // {id,n,f,s,d,h,monto,redondeo,sobrante,items:[{p,dias,c,manual}],total,dias,cajaAntes,cajaDespues,aut,motivo,nota,cr,anulada,anulMotivo,anulFecha}
+    arqueos: [],    // ajustes por arqueo del administrador: {id,f,ts,contado,cajaAntes,c (diferencia, puede ser negativa),motivo,quien}
     paquetes: [],   // paquetes de efectivo armados (NO son pagos): {id,t:'paq',n,f,turno,ts,items:[{p,nombre,c}],total,por,quien} y observaciones {id,t:'obs',ref,...}
     log: [], seq: { ent: 0, paq: 0 }, meta: { creado: ahora(), cambio: '', backup: '' },
   };
@@ -423,7 +424,10 @@ function normalizar(x) {
   }
   x.cargas = construirCargas(x.eventos);
   if (!x.config.admin) x.config.admin = 'Administrador';
+  x.empleados.forEach(function (m) { if (!m.activo && m.baja && m.alta && m.baja <= m.alta && m.baja === '2026-10-01') m.baja = '2026-09-30'; }); // inactivos de la nómina inicial
+  if (x.log.length > 5000) x.log.splice(0, x.log.length - 5000);
   if (!Array.isArray(x.paquetes)) x.paquetes = [];
+  if (!Array.isArray(x.arqueos)) x.arqueos = [];
   x.cargas = construirCargas(x.eventos, x.paquetes);
   x.seq = x.seq || { ent: 0 }; if (!x.seq.paq) x.seq.paq = x.paquetes.reduce(function (a, q) { return Math.max(a, q.n || 0); }, 0);
   var fuera = antes.e - x.empleados.length;
@@ -446,7 +450,7 @@ function iniciarAlmacenamiento() {
     try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { /* opcional */ }
   });
 }
-function bitacora(a, d) { D.log.push([ahora(), a, d]); if (D.log.length > 20000) D.log.splice(0, D.log.length - 20000); }
+function bitacora(a, d) { D.log.push([ahora(), a, d]); if (D.log.length > 5000) D.log.splice(0, D.log.length - 5000); }
 
 /* ---------- carpeta de datos en la PC (Chrome / Edge)
  * El usuario elige una carpeta una sola vez. Desde ahí, cada cambio se escribe también en archivos comunes:
@@ -461,38 +465,42 @@ var soportaCarpeta = typeof window.showDirectoryPicker === 'function';
 function idbGet(k) { return new Promise(function (res) { if (!IDB) return res(null); try { var q = IDB.transaction('estado').objectStore('estado').get(k); q.onsuccess = function () { res(q.result || null); }; q.onerror = function () { res(null); }; } catch (e) { res(null); } }); }
 function idbPut(k, v) { return new Promise(function (res) { if (!IDB) return res(false); try { var tx = IDB.transaction('estado', 'readwrite'); tx.objectStore('estado').put(v, k); tx.oncomplete = function () { res(true); }; tx.onerror = function () { res(false); }; } catch (e) { res(false); } }); }
 function idbDel(k) { return new Promise(function (res) { if (!IDB) return res(false); try { var tx = IDB.transaction('estado', 'readwrite'); tx.objectStore('estado').delete(k); tx.oncomplete = function () { res(true); }; tx.onerror = function () { res(false); }; } catch (e) { res(false); } }); }
-function csvTexto(filas) { return '\uFEFF' + filas.map(function (r) { return r.map(function (v) { v = v == null ? '' : String(v); return /[;"\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(';'); }).join('\r\n'); }
-function tieneDatos(x) { return !!((x.eventos || []).length || (x.paquetes || []).length || Object.keys(x.cargas || {}).length || (x.entregas || []).length || Object.keys(x.caja || {}).some(function (k) { return x.caja[k].inicial; })); }
+function csvTexto(filas) { return '\uFEFF' + filas.map(function (r) { return r.map(function (v) { v = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(v) && !/^-?\d+(,\d+)?$/.test(v)) v = "'" + v; return /[;"\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(';'); }).join('\r\n'); }
+function tieneDatos(x) { return !!((x.eventos || []).length || (x.paquetes || []).length || (x.arqueos || []).length || Object.keys(x.cargas || {}).length || (x.entregas || []).length || Object.keys(x.caja || {}).some(function (k) { return x.caja[k].inicial; })); }
 
 /** Registro legible de toda la plata: saldos iniciales, propinas (con su estado) y entregas por empleado. */
 function filasMovimientos() {
-  var out = [];
+  var out = [], altas = {};
+  (D.eventos || []).forEach(function (e) { if (e.t === 'alta') altas[e.id] = e; });
   Object.keys(D.caja || {}).forEach(function (s) {
     var h = D.caja[s].hist || [];
-    h.forEach(function (z, i) { out.push([z[0], 'Saldo inicial', dmy(z[3]), '', '', csvNum(z[2]), i === h.length - 1 ? 'Vigente' : 'Reemplazado', 'Antes: ' + $m(z[1]) + (z[4] ? ' · ' + z[4] : '')]); });
+    h.forEach(function (z, i) { out.push([z[0], 'Saldo inicial', dmy(z[3]), '', '', z[2], z[2] - (z[1] || 0), i === h.length - 1 ? 'Vigente' : 'Reemplazado', 'Antes: ' + $m(z[1] || 0) + (z[4] ? ' · ' + z[4] : '')]); });
   });
   Object.keys(D.cargas).forEach(function (k) {
     var c = D.cargas[k], m = emp(c.p);
     if (c.paq) return; // los paquetes van abajo, con su estado
-    out.push([c.cr, 'Propina', dmy(c.f), m.nombre, m.legajo, csvNum(c.an ? 0 : c.c), c.an ? 'Anulada' : c.h.length ? 'Corregida' : 'Original',
+    var a = altas[k], orig = a && !a.imp ? a.c : (c.an ? 0 : c.c);
+    out.push([c.cr, 'Propina', dmy(c.f), m.nombre, m.legajo, orig, orig, c.an ? 'Anulada' : c.h.length ? 'Corregida' : 'Original',
       'Cargó ' + (c.por === 'PLAYA' ? 'PLAYA' : (c.quien || 'Administrador')) + (c.h.length ? ' · ' + c.h.map(function (z) { return dmy(z[0]) + ' ' + String(z[0]).slice(11, 16) + ': ' + (z[1] == null ? '—' : $m(z[1])) + ' → ' + (z[2] == null ? 'quitada' : $m(z[2])); }).join(' | ') : '')]);
   });
-  correcciones().forEach(function (x) { var e = x.ev, m = emp(e.p); out.push([e.ts, 'Corrección', dmy(e.f), m.nombre + (e.pAntes && e.pAntes !== e.p ? ' (antes ' + emp(e.pAntes).nombre + ')' : ''), m.legajo, csvNum(e.c - e.antes), 'Original ' + $m(e.antes) + ' → corregido ' + $m(e.c), (e.motivo || '') + ' · ' + (e.quien || 'Administrador')]); });
-  paqList().forEach(function (q) { q.items.forEach(function (i) { out.push([q.ts, 'Paquete N° ' + nroPaq(q.n), dmy(q.f), i.nombre, emp(i.p).legajo, csvNum(i.c), 'Suma a caja · ' + textoEstado(estadoPaq(q)), 'Turno ' + turnoNom(q.turno) + ' · preparó ' + q.quien]); });
+  (D.eventos || []).filter(function (e) { return e.t === 'corr'; }).forEach(function (e) { var m = emp(e.p); out.push([e.ts, 'Corrección', dmy(e.f), m.nombre + (e.pAntes && e.pAntes !== e.p ? ' (antes ' + emp(e.pAntes).nombre + ')' : ''), m.legajo, e.c, e.c - e.antes, 'Original ' + $m(e.antes) + ' → corregido ' + $m(e.c), (e.motivo || '') + ' · ' + (e.quien || 'Administrador')]); });
+  paqList().forEach(function (q) { q.items.forEach(function (i) { out.push([q.ts, 'Paquete N° ' + nroPaq(q.n), dmy(q.f), i.nombre, emp(i.p).legajo, i.c, i.c, 'Suma a caja · ' + textoEstado(estadoPaq(q)), 'Turno ' + turnoNom(q.turno) + ' · preparó ' + q.quien]); });
     q.obs.forEach(function (o) { var cs = o.cambios || (o.p ? [{ p: o.p, antes: o.antes, c: o.c }] : []);
-      if (!cs.length) out.push([o.ts, (o.accion === 'ok' ? 'Paquete aprobado' : 'Nota paquete') + ' N° ' + nroPaq(q.n), dmy(q.f), '', '', '', o.accion === 'ok' ? 'Aprobado' : 'Observación', o.texto + ' · ' + o.quien]);
-      cs.forEach(function (x) { out.push([o.ts, 'Corrección paquete N° ' + nroPaq(q.n), dmy(q.f), emp(x.p).nombre, emp(x.p).legajo, csvNum(x.c - (x.antes || 0)), 'Original ' + $m(x.antes || 0) + ' → corregido ' + $m(x.c), o.texto + ' · ' + o.quien]); }); }); });
+      if (!cs.length) out.push([o.ts, (o.accion === 'ok' ? 'Paquete aprobado' : 'Nota paquete') + ' N° ' + nroPaq(q.n), dmy(q.f), '', '', '', 0, o.accion === 'ok' ? 'Aprobado' : 'Observación', o.texto + ' · ' + o.quien]);
+      cs.forEach(function (x) { out.push([o.ts, 'Corrección paquete N° ' + nroPaq(q.n), dmy(q.f), emp(x.p).nombre, emp(x.p).legajo, x.c, x.c - (x.antes || 0), 'Original ' + $m(x.antes || 0) + ' → corregido ' + $m(x.c), o.texto + ' · ' + o.quien]); }); }); });
+  (D.arqueos || []).forEach(function (a) { out.push([a.ts, 'Arqueo', dmy(a.f), '', '', a.contado, a.c, a.c === 0 ? 'Sin diferencia' : a.c > 0 ? 'Sobrante' : 'Faltante', 'Sistema ' + $m(a.cajaAntes) + ' · contado ' + $m(a.contado) + ' · ' + a.motivo + ' · ' + a.quien]); });
   D.entregas.forEach(function (en) {
     en.items.forEach(function (it) {
       var m = emp(it.p);
-      out.push([en.cr, 'Entrega ' + en.n, dmy(en.f), m.nombre, m.legajo, csvNum(it.c), en.anulada ? 'Anulada' : 'Vigente',
-        (en.d || en.h ? textoPeriodo(en.d, en.h) : '') + (it.dias ? ' · ' + it.dias + ' días' : '') + (it.manual ? ' · importe a mano' : '') + (en.anulada ? ' · anulada: ' + en.anulMotivo : '')]);
+      out.push([en.cr, 'Pago ' + en.n, dmy(en.f), m.nombre, m.legajo, it.c, en.anulada ? 0 : -it.c, en.anulada ? 'Anulado' : 'Vigente',
+        (en.d || en.h ? textoPeriodo(en.d, en.h) : '') + (it.dias ? ' · ' + it.dias + ' días' : '') + (it.manual ? ' · importe a mano' : '') + (en.anulada ? ' · anulado: ' + en.anulMotivo : '')]);
     });
-    if (!en.anulada && en.sobrante > 0) out.push([en.cr, 'Sobrante ' + en.n, dmy(en.f), '', '', csvNum(en.sobrante), 'Queda en caja', 'Sobrante por redondeo a billetes de ' + $m(en.redondeo || 0)]);
+    if (!en.anulada && en.sobrante > 0) out.push([en.cr, 'Sobrante ' + en.n, dmy(en.f), '', '', en.sobrante, 0, 'Queda en caja', 'Sobrante por redondeo a billetes de ' + $m(en.redondeo || 0)]);
   });
   out.sort(function (a, b) { return String(a[0]) < String(b[0]) ? -1 : String(a[0]) > String(b[0]) ? 1 : 0; });
-  out.forEach(function (r) { r[0] = r[0] ? dmy(r[0]) + ' ' + String(r[0]).slice(11, 16) : ''; });
-  return [['Registrado', 'Tipo', 'Fecha', 'Empleado', 'Legajo', 'Importe', 'Estado', 'Detalle']].concat(out);
+  var saldo = 0;
+  out.forEach(function (r) { saldo += r[6] || 0; r[0] = r[0] ? dmy(r[0]) + ' ' + String(r[0]).slice(11, 16) : ''; r[5] = r[5] === '' ? '' : csvNum(r[5]); r[6] = csvNum(r[6] || 0); r.splice(7, 0, csvNum(saldo)); });
+  return [['Registrado', 'Tipo', 'Fecha', 'Empleado', 'Legajo', 'Importe', 'Efecto en caja', 'Caja después', 'Estado', 'Detalle']].concat(out);
 }
 function filasBitacora() { return [['Fecha y hora', 'Acción', 'Detalle']].concat(D.log.map(function (x) { return [dmy(x[0]) + ' ' + x[0].slice(11, 19), x[1], x[2]]; })); }
 
@@ -511,8 +519,10 @@ async function escribirCarpeta() {
     await escribirArchivo(CARP.h, ARCH.datos, txt);
     var r = await CARP.h.getDirectoryHandle(ARCH.resp, { create: true });
     await escribirArchivo(r, 'Propinas_' + hoy() + '.json', txt);
-    await escribirArchivo(CARP.h, ARCH.mov, csvTexto(filasMovimientos()));
-    await escribirArchivo(CARP.h, ARCH.bit, csvTexto(filasBitacora()));
+    var avisoCsv = '';
+    try { await escribirArchivo(CARP.h, ARCH.mov, csvTexto(filasMovimientos())); } catch (e1) { avisoCsv = ARCH.mov; }
+    try { await escribirArchivo(CARP.h, ARCH.bit, csvTexto(filasBitacora())); } catch (e2) { avisoCsv = avisoCsv || ARCH.bit; }
+    if (avisoCsv && !CARP.avisoCsv) { CARP.avisoCsv = 1; toast('No se pudo actualizar ' + avisoCsv + ' (¿está abierto en Excel?). Los datos sí se guardaron. Cerralo y se actualiza solo.', 'err'); } else if (!avisoCsv) CARP.avisoCsv = 0;
     var nombres = []; for await (var k of r.keys()) { if (/^Propinas_\d{4}-\d{2}-\d{2}\.json$/.test(k)) nombres.push(k); }
     nombres.sort(); while (nombres.length > 120) await r.removeEntry(nombres.shift());
     CARP.ultimo = ahora(); CARP.error = '';
@@ -581,7 +591,7 @@ function api(metodo, q, cuerpo, cred) {
   var h = { 'content-type': 'application/json' }, u = cred ? cred.u : NUBE.usuario, c = cred ? cred.c : NUBE.clave;
   if (c) { h['x-clave'] = encodeURIComponent(c); h['x-usuario'] = u || ''; }
   return fetch('api/datos' + (q ? '?' + q : ''), { method: metodo, headers: h, body: cuerpo ? JSON.stringify(cuerpo) : undefined, cache: 'no-store' })
-    .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { j._st = r.status; return j; }); });
+    .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { j._st = r.status; if (j.ahora) { var t = Date.parse(String(j.ahora).replace(' ', 'T') + '-03:00'); if (!isNaN(t)) DESFASE = t - Date.now(); } return j; }); });
 }
 function nubeIniciar() {
   if (!/^https?:$/.test(location.protocol)) return Promise.resolve();
@@ -597,7 +607,8 @@ function nubeIniciar() {
 }
 function nubeEntrar(usuario, clave, auto, recordar) {
   return api('GET', usuario === 'playa' ? '' : 'desde=0', null, { u: usuario, c: clave }).then(function (j) {
-    if (j._st === 401 || j._st === 429) { if (auto) nubeLSset({ clave: '' }); throw new Error(j.error || 'Usuario o contraseña incorrectos.'); }
+    if (j._st === 429) throw new Error(j.error || 'Demasiados intentos fallidos. Probá de nuevo en 15 minutos.');
+    if (j._st === 401) { if (auto) nubeLSset({ clave: '' }); throw new Error(j.error || 'Usuario o contraseña incorrectos.'); }
     if (j._st !== 200) throw new Error(j.error || 'No se pudo conectar con la nube (error ' + j._st + ').');
     NUBE.usuario = usuario; NUBE.clave = clave; NUBE.rol = j.rol; NUBE.estado = 'ok'; NUBE.error = ''; NUBE.ultimo = ahora();
     nubeLSset({ usuario: usuario, clave: recordar ? clave : '', recordar: !!recordar, rol: j.rol });
@@ -615,11 +626,15 @@ function pedirClave(msg, usuario) {
     ov.innerHTML = '<div class="modal" style="max-width:430px"><div class="mbd" style="text-align:center;padding:30px 28px 10px"><div class="lgbig">BC</div><h3 style="margin:14px 0 4px">Propinas · ' + esc(D.config.empresa.nombre) + '</h3><p class="small muted" style="margin:0 0 18px">Elegí tu usuario e ingresá la contraseña</p>' +
       '<div class="usuarios"><button data-u="playa">⛽<b>PLAYA</b><span>Armar entrega</span></button><button data-u="admin">🔑<b>ADMINISTRADOR</b><span>Acceso total</span></button></div>' +
       '<input id="lgC" type="password" autocomplete="current-password" placeholder="Contraseña" style="width:100%;height:48px;border:1.5px solid var(--line);border-radius:12px;padding:0 14px;font-size:16px;text-align:center;margin-top:14px">' +
-      '<label class="check" style="justify-content:center;margin-top:12px"><input type="checkbox" id="lgR" checked> Recordar en este dispositivo</label><div id="lgE" class="small" style="color:var(--err);min-height:20px;margin-top:8px">' + esc(msg || '') + '</div></div>' +
+      '<label class="check" style="justify-content:center;margin-top:12px"><input type="checkbox" id="lgR"> <span id="lgRt">Recordar en este dispositivo</span></label><div id="lgE" class="small" style="color:var(--err);min-height:20px;margin-top:8px">' + esc(msg || '') + '</div></div>' +
       '<div class="mf" style="justify-content:center;padding-bottom:24px"><button class="btn pri lg" id="lgB" style="min-width:200px">Entrar</button></div></div>';
     document.body.appendChild(ov);
     var inp = $('#lgC', ov), b = $('#lgB', ov);
-    function marcar() { $$('[data-u]', ov).forEach(function (x) { x.classList.toggle('on', x.dataset.u === u); }); }
+    function marcar() {
+      $$('[data-u]', ov).forEach(function (x) { x.classList.toggle('on', x.dataset.u === u); });
+      // PLAYA: se recuerda (PC compartida de la playa). ADMINISTRADOR: solo si lo marcás, y nunca en la PC de la playa.
+      $('#lgR', ov).checked = u === 'playa'; $('#lgRt', ov).textContent = u === 'playa' ? 'Recordar en este dispositivo' : 'Recordar (solo si esta PC es tuya)';
+    }
     $$('[data-u]', ov).forEach(function (x) { x.onclick = function () { u = x.dataset.u; marcar(); inp.focus(); }; }); marcar();
     setTimeout(function () { inp.focus(); }, 60);
     function entrar() {
@@ -643,7 +658,7 @@ function aplicarDoc(datos, rev) {
 function sincronizarNube(j) {
   var L = nubeLS(), remoto = j.datos ? migrar(j.datos) : null, viejas = remoto ? remoto.eventos : [];
   var paso;
-  if (!remoto || (!tieneDatos(remoto) && tieneDatos(D))) { NUBE.rev = j.rev; paso = subirNube(); }
+  if (!remoto || !j.rev) { NUBE.rev = j.rev; paso = subirNube(); } // nube sin datos generales todavía
   else if (!tieneDatos(D)) { aplicarDoc(remoto, j.rev); paso = null; }
   else if (L.rev === j.rev) { NUBE.rev = j.rev; NUBE.ultimo = ahora(); paso = L.pend ? subirNube() : null; }
   else if (L.rev !== undefined && !L.pend) { aplicarDoc(remoto, j.rev); paso = null; }
@@ -666,11 +681,13 @@ function sincronizarEventos(j, viejas) {
   }
   var srv = {}; j.eventos.forEach(function (e) { srv[e.id] = 1; });
   var faltan = (D.eventos || []).filter(function (e) { return !srv[e.id] && (e.t === 'corr' || e.c > 0); });
-  D.eventos = j.eventos.slice(); NUBE.n = j.n; D.paquetes = (j.paquetes || []).slice(); NUBE.npq = j.npq || 0; recalcCargas(); guardarAhora(true);
+  D.eventos = j.eventos.concat(faltan); NUBE.n = j.n; /* lo que no está en la nube se queda hasta que suba bien */ D.paquetes = (j.paquetes || []).slice(); NUBE.npq = j.npq || 0; recalcCargas(); guardarAhora(true);
   if (!faltan.length) return;
+  var bien = 0;
   return faltan.reduce(function (pr, e) {
-    return pr.then(function () { return e.t === 'alta' ? api('POST', 'op=carga', { id: e.id, f: e.f, p: e.p, c: e.c, quien: e.quien }) : api('POST', 'op=corr', { id: e.id, ref: e.ref, c: e.c, p: e.p, motivo: e.motivo, quien: e.quien }); });
-  }, Promise.resolve()).then(traerEventos).then(function () { toast('Se subieron ' + faltan.length + ' propinas que estaban solo en esta PC.', 'ok'); });
+    return pr.then(function () { return (e.t === 'alta' ? api('POST', 'op=carga', { id: e.id, f: e.f, p: e.p, c: e.c, quien: e.quien }) : api('POST', 'op=corr', { id: e.id, ref: e.ref, c: e.c, p: e.p, motivo: e.motivo, quien: e.quien })).then(function (r) { if (r._st === 200) bien++; }, function () { /* queda para la próxima */ }); });
+  }, Promise.resolve()).then(function () { var loc = D.eventos.filter(function (e) { return !srv[e.id]; }); D.eventos = j.eventos.slice(); NUBE.n = j.n; return traerEventos().then(function () { var ids = {}; D.eventos.forEach(function (e) { ids[e.id] = 1; }); loc.forEach(function (e) { if (!ids[e.id]) D.eventos.push(e); }); recalcCargas(); guardarAhora(true); }); })
+    .then(function () { toast(bien === faltan.length ? 'Se subieron ' + bien + ' propinas que estaban solo en esta PC.' : 'Se subieron ' + bien + ' de ' + faltan.length + ' propinas de esta PC; las otras se reintentan la próxima vez.', bien === faltan.length ? 'ok' : 'err'); });
 }
 function traerEventos() {
   return api('GET', 'desde=' + NUBE.n + '&desdePq=' + (NUBE.npq || 0) + '&doc=0').then(function (j) {
@@ -682,13 +699,26 @@ function traerEventos() {
     return true;
   });
 }
+/** Junta lo que no se puede perder entre dos versiones: pagos (por id, una anulación gana) e historial de cambios. */
+function unirDocs(base, otro) {
+  var porId = {}; base.entregas.forEach(function (en) { porId[en.id] = en; });
+  otro.entregas.forEach(function (en) { var b = porId[en.id]; if (!b) { base.entregas.push(en); porId[en.id] = en; } else if (en.anulada && !b.anulada) { b.anulada = true; b.anulMotivo = en.anulMotivo; b.anulFecha = en.anulFecha; } });
+  base.entregas.sort(function (a, b) { return a.cr < b.cr ? -1 : a.cr > b.cr ? 1 : 0; });
+  var vistos = {}; base.entregas.forEach(function (en) { if (vistos[en.n]) { var m = 0; base.entregas.forEach(function (x) { m = Math.max(m, parseInt(String(x.n).slice(2), 10) || 0); }); en.n = 'E-' + String(m + 1).padStart(4, '0'); } vistos[en.n] = 1; });
+  base.seq.ent = Math.max(base.seq.ent || 0, otro.seq.ent || 0, base.entregas.reduce(function (a, x) { return Math.max(a, parseInt(String(x.n).slice(2), 10) || 0); }, 0));
+  base.arqueos = base.arqueos || []; var aq = {}; base.arqueos.forEach(function (a) { aq[a.id] = 1; }); (otro.arqueos || []).forEach(function (a) { if (!aq[a.id]) base.arqueos.push(a); });
+  base.arqueos.sort(function (a, b) { return a.ts < b.ts ? -1 : 1; });
+  var l = {}; base.log.forEach(function (x) { l[x.join('|')] = 1; }); otro.log.forEach(function (x) { if (!l[x.join('|')]) base.log.push(x); });
+  base.log.sort(function (a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; });
+  return base;
+}
 function elegirVersion(remoto, rev) {
   var f = function (x) { return x.meta.cambio ? dmy(x.meta.cambio) + ' ' + x.meta.cambio.slice(11, 16) : '—'; };
   var desc = function (x) { return x.empleados.length + ' empleados · ' + x.entregas.length + ' entregas'; };
-  return modal('¿Qué datos usamos?', '<p style="margin-top:0">Los datos generales (empleados, caja, entregas) de esta PC y los de la nube son distintos. Las propinas no se tocan: siempre se juntan.</p><div class="kv"><div><span>En esta PC</span><b style="font-size:15px">' + f(D) + '</b><div class="tiny muted">' + desc(D) + '</div></div><div><span>En la nube</span><b style="font-size:15px">' + f(remoto) + '</b><div class="tiny muted">' + desc(remoto) + '</div></div></div><p class="small muted">Lo que no elijas queda guardado como copia dentro de este navegador.</p>',
-    [{ t: 'Usar los de la nube', v: 'nube' }, { t: 'Usar los de esta PC', c: 'pri', v: 'pc' }]).then(function (v) {
-    if (v === 'nube') { idbPut('antes_nube_pc', JSON.stringify(D)); aplicarDoc(remoto, rev); refrescar(); toast('Se cargaron los datos de la nube.', 'ok'); return; }
-    if (v === 'pc') { idbPut('antes_nube_remoto', JSON.stringify(remoto)); NUBE.rev = rev; return subirNube(); }
+  return modal('¿Qué datos usamos?', '<p style="margin-top:0">Los datos generales (empleados, caja, entregas) de esta PC y los de la nube son distintos. Las propinas no se tocan: siempre se juntan.</p><div class="kv"><div><span>En esta PC</span><b style="font-size:15px">' + f(D) + '</b><div class="tiny muted">' + desc(D) + '</div></div><div><span>En la nube</span><b style="font-size:15px">' + f(remoto) + '</b><div class="tiny muted">' + desc(remoto) + '</div></div></div><p class="small muted">Los <b>pagos</b> de las dos versiones se juntan siempre, para que no se pierda ninguno. Lo demás que no elijas queda guardado como copia dentro de este navegador.</p>',
+    [{ t: 'Usar los de esta PC', v: 'pc' }, { t: 'Usar los de la nube (recomendado)', c: 'pri', v: 'nube' }]).then(function (v) {
+    if (v === 'nube') { idbPut('antes_nube_pc', JSON.stringify(D)); var local = JSON.parse(JSON.stringify(D)); aplicarDoc(remoto, rev); unirDocs(D, local); var falta = D.entregas.length > remoto.entregas.length; refrescar(); toast('Se cargaron los datos de la nube' + (falta ? ' (sin perder los pagos de esta PC)' : '') + '.', 'ok'); if (falta) { REV++; guardarAhora(); } return; }
+    if (v === 'pc') { idbPut('antes_nube_remoto', JSON.stringify(remoto)); unirDocs(D, remoto); REV++; guardarAhora(true); NUBE.rev = rev; return subirNube(); }
     return elegirVersion(remoto, rev);
   });
 }
@@ -706,7 +736,8 @@ function subirNube() {
       nubeLSset({ rev: j.rev, pend: REV === revLocal ? 0 : 1 });
       return true;
     }
-    if (j._st === 409) return api('GET', 'desde=' + NUBE.n).then(function (r) { subiendo = false; return r._st === 200 ? elegirVersion(migrar(r.datos), r.rev) : false; });
+    if (j._st === 409) return api('GET', 'desde=' + NUBE.n + '&desdePq=' + (NUBE.npq || 0)).then(function (r) { subiendo = false; if (r._st !== 200) { reintentarNube(); return false; } return elegirVersion(migrar(r.datos), r.rev); });
+    if (j._st === 400 || j._st === 413) { NUBE.estado = 'offline'; NUBE.error = j.error || 'La nube rechazó los datos'; subiendo = false; toast('La nube no aceptó los datos: ' + NUBE.error + '. Exportá una copia y avisá.', 'err'); return false; }
     if (j._st === 401) { NUBE.estado = 'login'; NUBE.rol = ''; nubeLSset({ clave: '' }); subiendo = false; return pedirClave('Volvé a ingresar la contraseña.', 'admin').then(function () { return subirNube(); }); }
     throw new Error(j.error || 'Error ' + j._st);
   }).catch(function (e) {
@@ -729,9 +760,9 @@ function revisarNube() {
     NUBE.estado = 'ok'; NUBE.error = ''; NUBE.ultimo = ahora();
     var tareas = [];
     if (m.n !== NUBE.n || (m.npq || 0) !== (NUBE.npq || 0)) tareas.push(traerEventos());
-    if (m.rev !== NUBE.rev && !nubeLS().pend) tareas.push(api('GET', 'desde=' + NUBE.n).then(function (r) { if (r._st === 200 && r.datos) aplicarDoc(r.datos, r.rev); }));
+    if (m.rev !== NUBE.rev && !nubeLS().pend) { var revAntes = REV; tareas.push(api('GET', 'desde=' + NUBE.n + '&desdePq=' + (NUBE.npq || 0)).then(function (r) { if (r._st === 200 && r.datos && REV === revAntes && !nubeLS().pend) aplicarDoc(r.datos, r.rev); })); }
     if (!tareas.length) { pie(); return; }
-    return Promise.all(tareas).then(function () { pie(); if (!(sucio && sucio()) && !document.querySelector('.ov')) refrescar(); });
+    return Promise.all(tareas).then(function () { pie(); var escribiendo = ACT === 'entregar' || (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) || $$('.pl-emp input, [data-v]').some(function (i) { return i.value.trim(); }); if (!(sucio && sucio()) && !escribiendo && !document.querySelector('.ov')) refrescar(); });
   }, function () { NUBE.estado = 'offline'; NUBE.error = 'Sin conexión'; pie(); });
 }
 function nubeSalir() {
@@ -783,18 +814,19 @@ function cajaCfg(s) { D.caja = D.caja || {}; return D.caja[s] || (D.caja[s] = { 
 function calc() {
   if (memo.rev === REV) return memo;
   var S = {}, P = {}, pagado = {};
-  function sx(s) { return S[s] || (S[s] = { s: s, inicial: 0, fIni: '', propinas: 0, entregado: 0, items: [] }); }
+  function sx(s) { return S[s] || (S[s] = { s: s, inicial: 0, fIni: '', propinas: 0, entregado: 0, ajustes: 0, ajNeg: 0, items: [] }); }
   function px(p, s) { var k = bucket(p, s); return P[k] || (P[k] = { k: k, p: p, s: s, propinas: 0, cobrado: 0, cargas: [], cobros: [] }); }
   D.config.sectores.forEach(function (s) { var cf = cajaCfg(s.id), x = sx(s.id); x.inicial = cf.inicial || 0; x.fIni = cf.fecha || ''; });
   Object.keys(D.cargas).forEach(function (k) { var c = D.cargas[k]; if (c.an) return; var x = sx(c.s); x.propinas += c.c; x.items.push(c); var e = px(c.p, c.s); e.propinas += c.c; e.cargas.push(c); });
+  (D.arqueos || []).forEach(function (a) { var x = sx(SEC); x.ajustes += a.c; if (a.c > 0) x.items.push({ k: 'AJ|' + a.id, f: a.f, c: a.c, cr: a.ts, ini: true, aj: true }); else x.ajNeg -= a.c; });
   D.entregas.forEach(function (en) { if (en.anulada) return; sx(en.s).entregado += en.total; en.items.forEach(function (it) { var e = px(it.p, en.s); e.cobrado += it.c; e.cobros.push({ en: en, it: it }); }); });
   Object.keys(S).forEach(function (k) {
     var x = S[k];
-    x.caja = x.inicial + x.propinas - x.entregado;
+    x.caja = x.inicial + x.propinas + x.ajustes - x.entregado;
     var items = x.items.slice();
-    if (x.inicial) items.push({ k: 'INI|' + k, f: x.fIni || '0000-00-00', c: x.inicial, cr: '', ini: true });
+    if (x.inicial) items.push({ k: 'INI|' + k, f: '0000-00-00', c: x.inicial, cr: '', ini: true });
     items.sort(function (a, b) { return a.f < b.f ? -1 : a.f > b.f ? 1 : ((b.ini ? 1 : 0) - (a.ini ? 1 : 0)) || (a.cr < b.cr ? -1 : 1); });
-    var resto = x.entregado;
+    var resto = x.entregado + x.ajNeg; // un faltante del arqueo se descuenta de la plata más vieja, como un pago
     items.forEach(function (c) { var pg = Math.max(0, Math.min(c.c, resto)); pagado[c.k] = pg; resto -= pg; });
     x.ordenados = items;
   });
@@ -937,7 +969,7 @@ function registrarEntrega(o) {
   var en = { id: uid('ENT'), n: 'E-' + String(D.seq.ent).padStart(4, '0'), f: o.f, s: o.s || SEC, d: o.d || '', h: o.h || '', monto: o.monto || total, redondeo: o.redondeo || 1, sobrante: sobrante,
     items: items.map(function (it) { return { p: it.p, dias: it.dias || 0, c: it.c, manual: !!it.manual }; }), total: total,
     dias: items.reduce(function (a, it) { return a + (it.dias || 0); }, 0), cajaAntes: caja, cajaDespues: caja - total,
-    aut: excede, motivo: excede ? String(o.motivo).trim() : '', nota: o.nota || '', cr: ahora(), anulada: false };
+    aut: excede, motivo: excede ? String(o.motivo).trim() : '', nota: o.nota || '', cr: ahora(), anulada: false, quien: adminNombre() };
   D.entregas.push(en);
   bitacora('ENTREGA', en.n + ' · ' + dmy(o.f) + ' · ' + items.length + ' empleados · ' + $m(total) + (sobrante ? ' · sobrante por redondeo ' + $m(sobrante) : '') + ' · caja ' + $m(caja) + ' → ' + $m(caja - total));
   guardar();
@@ -991,7 +1023,11 @@ function modal(titulo, html, botones, tam) {
     ov.addEventListener('mousedown', function (ev) { if (ev.target === ov) cerrar(null); });
     (botones || [{ t: 'Cerrar' }]).forEach(function (b) {
       var el = document.createElement('button'); el.className = 'btn ' + (b.c || ''); el.textContent = b.t;
-      el.onclick = function () { if (!b.fn) return cerrar(b.v === undefined ? null : b.v); try { var r = b.fn(ov, el); if (r !== false) cerrar(r === undefined ? true : r); } catch (e) { toast(e.message, 'err'); } };
+      el.onclick = function () {
+        if (hecho) return; // la ventana ya se está cerrando: un doble clic no registra dos veces
+        if (!b.fn) return cerrar(b.v === undefined ? null : b.v);
+        try { var r = b.fn(ov, el); if (r !== false) cerrar(r === undefined ? true : r); } catch (e) { toast(e.message, 'err'); }
+      };
       $('.mf', ov).appendChild(el);
     });
     document.body.appendChild(ov);
@@ -1079,7 +1115,7 @@ var ICO = {
   ajustes: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
 };
 function ico(n) { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + ICO[n] + '</svg>'; }
-var MENU = [['inicio', 'Inicio'], ['cargar', 'Cargar propinas'], ['paquete', 'Armar entrega'], ['paquetes', 'Control de paquetes'], ['entregar', 'Pagar propinas'], ['caja', 'Caja'], ['reportes', 'Reportes WhatsApp'], ['historial', 'Historial'], null, ['empleados', 'Empleados'], ['ajustes', 'Ajustes']];
+var MENU = [['inicio', 'Inicio'], ['paquete', 'Armar entrega'], ['paquetes', 'Control de paquetes'], ['entregar', 'Pagar propinas'], ['caja', 'Caja'], ['reportes', 'Reportes WhatsApp'], ['historial', 'Historial'], null, ['empleados', 'Empleados'], ['ajustes', 'Ajustes']];
 var ACT = 'inicio', F = {}, sucio = null;
 function menu() {
   var PERM = ['inicio', 'caja', 'reportes', 'historial', 'ajustes'];
@@ -1090,6 +1126,7 @@ function menu() {
 function ir(p) {
   if (sucio && sucio()) { confirmar('Cambios sin guardar', '<p>Hay importes que todavía no guardaste. ¿Salir igual?</p>', 'Salir sin guardar', 'dan s').then(function (ok) { if (ok) { sucio = null; ir(p); } }); return; }
   if (esPlaya()) p = 'paquete'; // PLAYA solo arma paquetes
+  if (p === 'cargar') p = 'paquete'; // ya no hay carga a mano: las propinas entran solo por los paquetes
   else if (p === 'playa') p = 'inicio';
   sucio = null; ACT = p; menu(); $('#acts').innerHTML = '';
   var v = $('#view'); v.style.animation = 'none'; void v.offsetWidth; v.style.animation = '';
@@ -1111,8 +1148,8 @@ function pie() {
 /* ===================================================================== INICIO */
 function pInicio() {
   var h0 = new Date().getHours(), saludo = h0 < 12 ? 'Buen día' : h0 < 20 ? 'Buenas tardes' : 'Buenas noches';
-  cab(saludo + ' 👋', diaNombre(hoy()) + ' ' + dmy(hoy()) + ' · ' + D.config.empresa.nombre + ' · Playa', '<button class="btn" id="bE">' + ico('entregar') + 'Pagar</button><button class="btn pri" id="bC">' + ico('cargar') + 'Cargar propinas</button>');
-  $('#bC').onclick = function () { F.cg = { f: hoy() }; ir('cargar'); }; $('#bE').onclick = function () { ir('entregar'); };
+  cab(saludo + ' 👋', diaNombre(hoy()) + ' ' + dmy(hoy()) + ' · ' + D.config.empresa.nombre + ' · Playa', '<button class="btn" id="bE">' + ico('entregar') + 'Pagar</button><button class="btn pri" id="bC">' + ico('paquete') + 'Armar entrega</button>');
+  $('#bC').onclick = function () { ir('paquete'); }; $('#bE').onclick = function () { ir('entregar'); };
   var x = calc().S[SEC] || { caja: 0, inicial: 0, propinas: 0, entregado: 0 }, sem = rango('semana'), tHoy = 0, nHoy = {}, tSem = 0, porDia = {};
   Object.keys(D.cargas).forEach(function (k) { var c = D.cargas[k]; if (c.an) return; porDia[c.f] = (porDia[c.f] || 0) + c.c; if (c.f === hoy()) { tHoy += c.c; if (!nHoy[c.p]) nHoy[c.p] = 1; } if (enRango(c.f, sem[0], sem[1])) tSem += c.c; });
   var ing = x.inicial + x.propinas, activos = empleadosDe(SEC).length;
@@ -1122,27 +1159,27 @@ function pInicio() {
   if (pend.length) h += '<div class="banner warn">📦 <div><b>' + pend.length + ' paquete' + (pend.length === 1 ? '' : 's') + ' pendiente' + (pend.length === 1 ? '' : 's') + ' de revisar</b> (' + $m(pend.reduce(function (a, q) { return a + totalEfectivo(q); }, 0)) + ', ya sumado a la caja). <button class="btn sm" id="bPend" style="margin-left:8px">Revisar</button></div></div>';
   if (!soloLectura() && !x.inicial && !D.entregas.length) h += '<div class="banner info">💰 <div>¿Ya tenés plata de propinas en la caja? <a href="#" id="bIni" style="font-weight:700;color:inherit">Cargá el saldo inicial</a> para que se sume a lo que se reparte.</div></div>';
   h += '<div class="grid g3 stagger">';
-  h += '<div class="card hero"><div class="l">En caja para repartir</div><div class="v" data-cnt="' + x.caja + '">$ 0</div><div class="row"><div><span>Saldo inicial</span><b>' + $m(x.inicial) + '</b></div><div><span>Propinas cargadas</span><b>' + $m(x.propinas) + '</b></div><div><span>Ya entregado</span><b>' + $m(x.entregado) + '</b></div></div></div>';
+  h += '<div class="card hero"><div class="l">En caja para repartir</div><div class="v" data-cnt="' + x.caja + '">$ 0</div><div class="row"><div><span>Saldo inicial</span><b>' + $m(x.inicial) + '</b></div><div><span>Propinas (paquetes)</span><b>' + $m(x.propinas) + '</b></div>' + (x.ajustes ? '<div><span>Ajustes por arqueo</span><b>' + (x.ajustes > 0 ? '+' : '') + $m(x.ajustes) + '</b></div>' : '') + '<div><span>Ya pagado</span><b>' + $m(x.entregado) + '</b></div></div></div>';
   h += '<div class="card sect PLAYA"><div class="top"><b>📅 Hoy</b><span class="tiny muted" style="margin-left:auto">' + diaNombre(hoy()) + '</span></div><div class="l">Propinas del día</div><div class="v" data-cnt="' + tHoy + '">$ 0</div>' +
-    '<div class="barra"><i data-w="' + (activos ? Math.min(100, Math.round(Object.keys(nHoy).length / activos * 100)) : 0) + '"></i></div><div class="mini"><span><b>' + Object.keys(nHoy).length + '</b> de ' + activos + ' empleados cargados</span></div></div>';
+    '<div class="barra"><i data-w="' + (activos ? Math.min(100, Math.round(Object.keys(nHoy).length / activos * 100)) : 0) + '"></i></div><div class="mini"><span><b>' + Object.keys(nHoy).length + '</b> de ' + activos + ' empleados con propina</span></div></div>';
   h += '<div class="card sect PLAYA"><div class="top"><b>🗓️ Esta semana</b><span class="tiny muted" style="margin-left:auto">' + dm(sem[0]) + ' al ' + dm(sem[1]) + '</span></div><div class="l">Propinas de la semana</div><div class="v" data-cnt="' + tSem + '">$ 0</div>' +
     '<div class="barra"><i data-w="' + Math.round(diasPeriodo(sem[0], hoy()) / 7 * 100) + '"></i></div><div class="mini"><span>Promedio por día <b>' + $m(Math.floor(tSem / Math.max(1, diasPeriodo(sem[0], hoy())) / 100) * 100) + '</b></span></div></div>';
   h += '</div>';
-  h += '<div class="grid g21 mt stagger"><div class="card"><div class="hd"><h3>Últimos 7 días</h3><span class="r tiny muted">' + (soloLectura() ? 'Tocá un día para ver el detalle' : 'Tocá un día para cargarlo o revisarlo') + '</span></div><div class="bd"><div class="dias7">';
+  h += '<div class="grid g21 mt stagger"><div class="card"><div class="hd"><h3>Últimos 7 días</h3><span class="r tiny muted">' + 'Tocá un día para ver el detalle' + '</span></div><div class="bd"><div class="dias7">';
   for (var i = 6; i >= 0; i--) {
     var f = addD(hoy(), -i), t = porDia[f];
-    h += '<div class="slot ' + (t !== undefined ? 'ok' : '') + (i === 0 ? ' hoy' : '') + '" data-dia="' + f + '"><div class="t">' + (i === 0 ? 'Hoy' : DIAS[dI(f).getDay()].slice(0, 3)) + ' ' + dm(f) + '</div><div class="v ' + (t !== undefined ? '' : 'no') + '">' + (t !== undefined ? $w(t) : 'Sin cargar') + '</div></div>';
+    h += '<div class="slot ' + (t !== undefined ? 'ok' : '') + (i === 0 ? ' hoy' : '') + '" data-dia="' + f + '"><div class="t">' + (i === 0 ? 'Hoy' : DIAS[dI(f).getDay()].slice(0, 3)) + ' ' + dm(f) + '</div><div class="v ' + (t !== undefined ? '' : 'no') + '">' + (t !== undefined ? $w(t) : 'Sin paquetes') + '</div></div>';
   }
   h += '</div></div></div>';
   var ult = D.entregas.slice().reverse().slice(0, 6);
-  h += '<div class="card"><div class="hd"><h3>Últimas entregas</h3><span class="r"><button class="btn ghost sm" data-go="historial">Ver todas</button></span></div>' +
+  h += '<div class="card"><div class="hd"><h3>Últimos pagos</h3><span class="r"><button class="btn ghost sm" data-go="historial">Ver todas</button></span></div>' +
     (ult.length ? '<ul class="rank">' + ult.map(function (en) { return '<li data-en="' + en.id + '" style="cursor:pointer"><div><b>' + esc(en.n) + '</b>' + (en.anulada ? ' <span class="pill err">Anulada</span>' : '') + '<div class="tiny muted">' + dmy(en.f) + ' · ' + en.items.length + ' empleados' + (en.d || en.h ? ' · ' + esc(textoPeriodo(en.d, en.h)) : '') + '</div></div><b class="num">' + $m(en.total) + '</b></li>'; }).join('') + '</ul>'
-      : '<div class="empty"><div class="ic">💵</div><b>Todavía no hiciste entregas</b>Cuando repartas la caja vas a ver acá cada entrega.</div>') + '</div></div>';
+      : '<div class="empty"><div class="ic">💵</div><b>Todavía no hiciste pagos</b>Cuando repartas la caja vas a ver acá cada pago.</div>') + '</div></div>';
   $('#view').innerHTML = h;
   engancharCarpeta($('#view'));
   if ($('#bIni')) $('#bIni').onclick = function (ev) { ev.preventDefault(); ir('caja'); };
   if ($('#bPend')) $('#bPend').onclick = function () { F.pqs = Object.assign(F.pqs || {}, { tab: 'lista', pend: true }); ir('paquetes'); };
-  $$('[data-dia]').forEach(function (s) { s.onclick = function () { if (soloLectura()) { F.rep = Object.assign(F.rep || {}, { tipo: 'diario', f: s.dataset.dia }); ir('reportes'); return; } F.cg = { f: s.dataset.dia }; ir('cargar'); }; });
+  $$('[data-dia]').forEach(function (s) { s.onclick = function () { if (soloLectura()) { F.rep = Object.assign(F.rep || {}, { tipo: 'diario', f: s.dataset.dia }); ir('reportes'); return; } F.rep = Object.assign(F.rep || {}, { tipo: 'diario', f: s.dataset.dia }); ir('reportes'); }; });
   $$('[data-en]').forEach(function (li) { li.onclick = function () { verReporte(reporteEntrega(D.entregas.find(function (x) { return x.id === li.dataset.en; }))); }; });
   $$('[data-go]').forEach(function (b) { b.onclick = function () { ir(b.dataset.go); }; });
 }
@@ -1199,7 +1236,7 @@ function pCargar() {
   h += d.empleados.length ? '<div class="pl-lista stagger">' + d.empleados.map(function (m) {
     return '<div class="pl-emp' + (c.flash === m.id ? ' flash' : '') + '" data-p="' + esc(m.id) + '" data-n="' + esc(m.nombre.toLowerCase()) + '">' + persona(m) +
       '<div class="pl-num"><span>' + (admin && c.f !== hoy() ? 'Ese día' : 'Hoy') + '</span><b>' + $m(m.hoy) + '</b></div><div class="pl-num"><span>Acumulado</span><b>' + $m(m.acum) + '</b></div>' +
-      '<input inputmode="decimal" autocomplete="off" placeholder="Importe"><button class="btn pri" data-reg>Registrar</button></div>';
+      '<input inputmode="decimal" autocomplete="off" placeholder="Importe" value="' + esc((c.borr || {})[m.id] || '') + '"><button class="btn pri" data-reg>Registrar</button></div>';
   }).join('') + '</div>' : '<div class="card"><div class="empty"><div class="ic">👥</div><b>No hay empleados de Playa habilitados</b>' + (admin ? 'Agregalos en Empleados.' : 'El administrador tiene que entrar una vez con su usuario para publicar la lista.') + '</div></div>';
   h += '<div class="card mt"><div class="hd"><h3>Cargas ' + (admin && c.f !== hoy() ? 'del ' + dmy(c.f) : 'de hoy') + '</h3><span class="r">' + (admin ? '<button class="btn sm" id="plComp">🧾 Comprobante del día</button>' : '') + '</span></div><div class="bd p0 tw maxh"><table class="t"><thead><tr><th>Hora</th><th>Empleado</th><th class="num">Importe</th><th>Cargó</th><th>Estado</th>' + (admin ? '<th></th>' : '') + '</tr></thead><tbody>' +
     (d.cargas.length ? d.cargas.map(function (x) {
@@ -1217,24 +1254,27 @@ function pCargar() {
   q.onkeydown = function (ev) { if (ev.key === 'Enter') { var r = $$('.pl-emp').filter(function (x) { return x.style.display !== 'none'; }); if (r.length) $('input', r[0]).focus(); } };
   $$('.pl-emp').forEach(function (row) {
     var inp = $('input', row), b = $('[data-reg]', row);
-    inp.onblur = function () { var v = parseAR(inp.value); if (v !== null && !isNaN(v)) inp.value = miles(v); };
+    inp.onblur = function () { var v = parseAR(inp.value); if (v !== null && !isNaN(v)) inp.value = miles(v); (c.borr = c.borr || {})[row.dataset.p] = inp.value; };
+    inp.oninput = function () { (c.borr = c.borr || {})[row.dataset.p] = inp.value; };
     inp.onkeydown = function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); registrar(); } };
     b.onclick = registrar;
     function registrar() {
+      if (row.dataset.ocupado) return; // un doble Enter no abre dos confirmaciones
       var p = row.dataset.p, m = d.empleados.find(function (x) { return x.id === p; }), v = parseAR(inp.value);
       if (v === null || isNaN(v) || v <= 0) { toast('Ingresá un importe válido para ' + m.nombre + ' (ej. 5000 o 5.000).', 'err'); inp.focus(); return; }
       var conf = confirmar('Confirmar carga', '<p style="font-size:20px;text-align:center;margin:8px 0 12px">¿Registrar <b>' + $w(v) + '</b> para <b>' + esc(m.nombre) + '</b>?</p>' +
         (m.hoy ? '<p class="small muted" style="text-align:center;margin:0">' + (admin && c.f !== hoy() ? 'Ese día' : 'Hoy') + ' ya tiene ' + $m(m.hoy) + ' declarados. Va a quedar en <b>' + $m(m.hoy + v) + '</b>.</p>' : '') +
         (admin && c.f !== hoy() ? '<div class="banner warn mt" style="margin-bottom:0">Se carga en el día ' + diaNombre(c.f) + ' ' + dmy(c.f) + '.</div>' : ''), 'Registrar');
+      row.dataset.ocupado = '1';
       setTimeout(function () { var bp = document.querySelector('.ov .mf .btn.pri'); if (bp) bp.focus(); }, 90);
       conf.then(function (ok) {
-        if (!ok) { inp.focus(); return; }
+        if (!ok) { delete row.dataset.ocupado; inp.focus(); return; }
         b.disabled = true; b.textContent = 'Guardando…';
         registrarCarga(p, v, admin ? c.f : undefined).then(function () {
           toast('✓ ' + $w(v) + ' registrado para ' + m.nombre, 'ok');
-          c.flash = p; c.q = '';
+          c.flash = p; c.q = ''; if (c.borr) delete c.borr[p];
           return esPlaya() ? refrescarPlaya() : refrescar();
-        }).then(function () { var qq = $('#plQ'); if (qq) qq.focus(); }, function (e) { toast(e.message, 'err'); b.disabled = false; b.textContent = 'Registrar'; });
+        }).then(function () { var qq = $('#plQ'); if (qq) qq.focus(); }, function (e) { toast(e.message, 'err'); b.disabled = false; b.textContent = 'Registrar'; delete row.dataset.ocupado; });
       });
     }
   });
@@ -1291,7 +1331,7 @@ function comprobanteEntrega(en) {
     '<tr class="tot"><td colspan="3">TOTAL ENTREGADO (' + items.length + ' empleados)</td><td class="n">' + $m(en.total) + '</td><td></td></tr></tbody></table>' +
     '<table style="width:auto;min-width:50%"><tbody>' + (en.sobrante ? '<tr><td>Sobrante del redondeo (queda en caja)</td><td class="n">' + $m(en.sobrante) + '</td></tr>' : '') + (en.cajaDespues != null ? '<tr><td>Queda en caja</td><td class="n">' + $m(en.cajaDespues) + '</td></tr>' : '') + '</tbody></table>' +
     (en.nota ? '<p>Observación: ' + esc(en.nota) + '</p>' : '') +
-    '<div class="firmas"><div>Entregó: ' + esc(adminNombre()) + '</div><div>Controló</div></div>';
+    '<div class="firmas"><div>Entregó: ' + esc(en.quien || adminNombre()) + '</div><div>Controló</div></div>';
   return imprimir('Comprobante ' + en.n, h);
 }
 function comprobanteDia(f) {
@@ -1311,11 +1351,11 @@ function comprobanteDia(f) {
  * NO es un pago: no descuenta, no marca nada como pagado y no toca declaraciones ni acumulados. */
 var TURNOS = [['M', '🌅 Mañana'], ['T', '☀️ Tarde'], ['N', '🌙 Noche']];
 function turnoNom(t) { return { M: 'Mañana', T: 'Tarde', N: 'Noche' }[t] || t || ''; }
-/* Turnos de la estación (hora de Argentina): Mañana 05:40–13:40 · Tarde 13:40–21:40 · Noche 21:40–05:40.
- * La noche pertenece al día en que empezó: a las 02:00 del 04/11 es "Noche del 03/11". */
+/* Turnos de la estación (hora de Argentina): Mañana 06:30–14:30 · Tarde 14:30–22:30 · Noche 22:30–06:30.
+ * La noche se toma con la fecha del día que empieza a las 00:00: a las 23:00 del 03/11 ya es "Noche del 04/11". */
 var DESFASE = 0; // diferencia con el reloj del servidor (se ajusta al conectarse)
 function relojAR() { var d = new Date(Date.now() + DESFASE - 3 * 3600000); return { f: d.toISOString().slice(0, 10), min: d.getUTCHours() * 60 + d.getUTCMinutes() }; }
-function turnoYFecha() { var r = relojAR(); return r.min < 340 ? { turno: 'N', f: addD(r.f, -1) } : r.min < 820 ? { turno: 'M', f: r.f } : r.min < 1300 ? { turno: 'T', f: r.f } : { turno: 'N', f: r.f }; }
+function turnoYFecha() { var r = relojAR(); return r.min < 390 ? { turno: 'N', f: r.f } : r.min < 870 ? { turno: 'M', f: r.f } : r.min < 1350 ? { turno: 'T', f: r.f } : { turno: 'N', f: addD(r.f, 1) }; }
 function turnoActual() { return turnoYFecha().turno; }
 function nroPaq(n) { return String(n || 0).padStart(6, '0'); }
 function papel() { try { return localStorage.getItem('propinasBeraza.papel') === '58' ? '58' : '80'; } catch (e) { return '80'; } }
@@ -1348,11 +1388,11 @@ function registrarPaquete(o) {
   var items = (o.items || []).filter(function (i) { return i.c > 0; });
   if (!items.length) return Promise.reject(new Error('Agregá al menos un empleado con importe.'));
   if (items.some(function (i) { return Math.round(i.c) !== i.c; })) return Promise.reject(new Error('Hay un importe inválido.'));
-  var b = { id: uid('Q'), f: o.f, turno: o.turno, items: items.map(function (i) { return { p: i.p, nombre: nombreDe(i.p), c: i.c }; }), quien: adminNombre() };
+  var b = { id: o.id || uid('Q'), f: o.f, turno: o.turno, items: items.map(function (i) { return { p: i.p, nombre: nombreDe(i.p), c: i.c }; }), quien: adminNombre() };
   if (enNube()) {
     return api('POST', 'op=paquete', b).then(function (j) {
       if (j._st !== 200 || !j.paq) throw new Error(j.error || 'No se pudo guardar el paquete (error ' + j._st + ').');
-      if (esPlaya()) { PL.paquetes = (PL.paquetes || []).concat([j.paq]); return j.paq; }
+      if (esPlaya()) { if (!(PL.paquetes || []).some(function (x) { return x.id === j.paq.id; })) PL.paquetes = (PL.paquetes || []).concat([j.paq]); return j.paq; }
       return traerEventos().then(function () { return j.paq; });
     }).catch(function (e) { throw errorRed(e); });
   }
@@ -1406,7 +1446,8 @@ function ticketPaquete(q, reimpresion) {
     '<div class="kv"><span>Hora de preparación</span><b>' + String(q.ts || '').slice(11, 16) + '</b></div><div class="kv"><span>Turno</span><b>' + turnoNom(q.turno).toUpperCase() + '</b></div>' +
     (String(q.ts || '').slice(0, 10) !== q.f ? '<div class="mini">Preparado el ' + dmy(q.ts) + '</div>' : '') + '<div class="hr"></div>' +
     '<table><thead><tr><th>EMPLEADO</th><th class="n">IMPORTE</th></tr></thead><tbody>' + items.map(function (i) { return '<tr><td>' + esc(i.nombre) + '</td><td class="n">' + $w(i.c) + '</td></tr>'; }).join('') + '</tbody></table>' +
-    '<div class="hr"></div><div class="tot"><span>TOTAL</span><span>' + $w(q.total) + '</span></div><div class="mini">' + items.length + ' empleado' + (items.length === 1 ? '' : 's') + '</div><div class="hr"></div>' +
+    '<div class="hr"></div><div class="tot"><span>TOTAL</span><span>' + $w(q.total) + '</span></div><div class="mini">' + items.length + ' empleado' + (items.length === 1 ? '' : 's') + '</div>' +
+    (reimpresion && q.obs && estadoPaq(q) === 'corr' ? '<div class="re" style="margin-top:2mm">CORREGIDO POR ADMINISTRACIÓN<br>VALE ' + $w(totalEfectivo(q)) + '</div>' : '') + '<div class="hr"></div>' +
     '<div>Preparado por: <b>' + esc(q.quien) + '</b></div>' +
     '<div class="firma">Firma</div><div class="firma">Control administrativo</div>' +
     '<div class="c mini" style="margin-top:3mm">Dinero contado y armado en paquete.<br>No es comprobante de pago.</div></body></html>';
@@ -1432,13 +1473,13 @@ function pPaquete() {
   var st = F.pq = F.pq || { fAuto: true, tAuto: true }; st.items = st.items || [];
   // PLAYA: fecha y turno siempre automáticos según la hora. Administrador: automáticos salvo que los cambie a mano.
   if (fija || !st.f || st.fAuto) st.f = tf.f; if (fija || !st.turno || st.tAuto) st.turno = tf.turno;
-  if (st.f > hoyR) st.f = hoyR;
+  var maxF = tf.f > hoyR ? tf.f : hoyR; if (st.f > maxF) st.f = maxF;
   cab('📦 Armar entrega', 'Preparar paquete de propinas · ' + ((esPlaya() && PL && PL.empresa) || D.config.empresa.nombre) + ' · Playa', esPlaya() ? botonesPlaya() : '<button class="btn" data-go="paquetes">Control de paquetes</button>');
   var emps = empleadosPaquete(), enPaq = {}; st.items.forEach(function (i) { enPaq[i.p] = 1; });
   var sT = segmento('qT', TURNOS, st.turno, function (v) { st.turno = v; st.tAuto = false; }, 'big');
   var h = tabsPlaya('paquete') + '<div class="banner info">📦 <div>Contá el dinero, agregá a cada empleado con lo que le corresponde y confirmá. <b>El paquete suma a la caja de propinas</b> y queda <b>pendiente de revisión</b> del administrador. No es un pago.</div></div>' +
-    (fija ? '<div class="bar"><div class="card" style="padding:12px 18px;display:flex;gap:28px;align-items:center;flex-wrap:wrap"><div><div class="tiny muted">FECHA</div><b id="qFtxt" style="font-size:20px">' + diaNombre(st.f) + ' ' + dmy(st.f) + '</b></div><div><div class="tiny muted">TURNO</div><b id="qTtxt" style="font-size:20px">' + esc((TURNOS.find(function (t) { return t[0] === st.turno; }) || [0, ''])[1]) + '</b></div><div class="tiny muted" style="max-width:300px">Se ajustan solos con la hora: Mañana 5:40 a 13:40 · Tarde 13:40 a 21:40 · Noche 21:40 a 5:40 (cuenta para el día en que empezó).</div></div>'
-      : '<div class="bar"><div class="f"><label>Fecha</label><input type="date" id="qF" value="' + st.f + '" max="' + hoyR + '"></div><div class="f"><label>Turno</label>' + sT.html + '</div>') +
+    (fija ? '<div class="bar"><div class="card" style="padding:12px 18px;display:flex;gap:28px;align-items:center;flex-wrap:wrap"><div><div class="tiny muted">FECHA</div><b id="qFtxt" style="font-size:20px">' + diaNombre(st.f) + ' ' + dmy(st.f) + '</b></div><div><div class="tiny muted">TURNO</div><b id="qTtxt" style="font-size:20px">' + esc((TURNOS.find(function (t) { return t[0] === st.turno; }) || [0, ''])[1]) + '</b></div><div class="tiny muted" style="max-width:300px">Se ajustan solos con la hora: Mañana 6:30 a 14:30 · Tarde 14:30 a 22:30 · Noche 22:30 a 6:30 (va con la fecha del día que empieza a las 00:00).</div></div>'
+      : '<div class="bar"><div class="f"><label>Fecha</label><input type="date" id="qF" value="' + st.f + '" max="' + maxF + '"></div><div class="f"><label>Turno</label>' + sT.html + '</div>') +
     '<div class="f"><label>Papel</label><select id="qPapel">' + opts([['80', '80 mm'], ['58', '58 mm']], papel()) + '</select></div></div>' +
     '<div class="grid g21 stagger"><div class="card"><div class="hd"><h3>1 · Empleados incluidos</h3><span class="r"><button class="btn sm" id="qTodos">Agregar todos</button></span></div><div class="bd">' +
     '<input id="qQ" placeholder="Buscar empleado…" autocomplete="off" style="width:100%;height:42px;border:1.5px solid var(--line);border-radius:11px;padding:0 12px;margin-bottom:12px">' +
@@ -1479,7 +1520,7 @@ function pPaquete() {
   var filas = $$('tr[data-q]');
   filas.forEach(function (tr, i) {
     var it = st.items.find(function (x) { return x.p === tr.dataset.q; }), inp = $('[data-v]', tr);
-    inp.oninput = function () { it.v = inp.value; totalizar(); };
+    inp.oninput = function () { it.v = inp.value; st.idEnvio = null; totalizar(); };
     inp.onblur = function () { var v = parseAR(inp.value); if (v !== null && !isNaN(v)) { inp.value = miles(v); it.v = inp.value; } };
     inp.onfocus = function () { inp.select(); };
     inp.onkeydown = function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); var sig = filas[i + 1]; if (sig) $('[data-v]', sig).focus(); else $('#qQ').focus(); } };
@@ -1497,9 +1538,10 @@ function pPaquete() {
       '<p class="small muted" style="margin-bottom:0">Al confirmar se guarda el paquete, <b>suma a la caja</b>, queda pendiente de revisión y se imprime el comprobante para abrochar.</p>';
     modal('¿Confirmás el paquete?', html, [{ t: 'Volver' }, { t: '🖨️ Confirmar e imprimir', c: 'pri', fn: function () {
       $('#qOk').disabled = true;
-      registrarPaquete({ f: st.f, turno: st.turno, items: items }).then(function (q) {
+      st.idEnvio = st.idEnvio || uid('Q');
+      registrarPaquete({ id: st.idEnvio, f: st.f, turno: st.turno, items: items }).then(function (q) {
         imprimirTicket(ticketPaquete(q));
-        st.items = []; st.fAuto = true; st.tAuto = true;
+        st.items = []; st.fAuto = true; st.tAuto = true; st.idEnvio = null;
         festejar('Paquete N° ' + nroPaq(q.n));
         setTimeout(refrescar, 700);
       }, function (e) { toast(e.message, 'err'); $('#qOk').disabled = false; });
@@ -1510,11 +1552,11 @@ function pPaquete() {
 
 /* ---------- control de paquetes (solo administrador) */
 function pPaquetes() {
-  var f = F.pqs = F.pqs || { tab: 'lista' };
+  var f = F.pqs = F.pqs || { tab: 'lista' }; f.tab = 'lista';
   if (f.pend && !paqPendientes().length) f.pend = false;
   if (f.d === undefined) { var r = rango('mes'); f.d = r[0]; f.h = r[1]; }
   cab('Control de paquetes', 'Revisá los paquetes que armó el personal: si está OK lo aprobás, si no, lo corregís', '<button class="btn" id="qCsv">Exportar a Excel</button><button class="btn pri" data-go="paquete">📦 Armar entrega</button>');
-  var tabs = '<div class="tabs">' + [['lista', 'Paquetes'], ['control', 'Cargado a mano vs. paquetes']].map(function (t) { return '<a data-tab="' + t[0] + '" class="' + (f.tab === t[0] ? 'on' : '') + '">' + t[1] + '</a>'; }).join('') + '</div>';
+  var tabs = '<div class="tabs">' + [['lista', 'Paquetes']].map(function (t) { return '<a data-tab="' + t[0] + '" class="' + (f.tab === t[0] ? 'on' : '') + '">' + t[1] + '</a>'; }).join('') + '</div>';
   var cp = chipsPeriodo(f, refrescar, true);
   $('#view').innerHTML = tabs + '<div class="banner info">📦 <div>Cada paquete <b>suma a la caja</b> apenas lo arman y queda <b>pendiente de revisar</b>. Si está bien, tocá <b>Está OK</b>; si no, <b>Corregir</b>: la caja se mueve por la diferencia y el ticket original se conserva.</div></div>' +
     '<div class="bar">' + cp.html + '<div class="f grow"><label>Buscar</label><input id="qB" value="' + esc(f.q || '') + '" placeholder="Empleado o N° de paquete"></div>' + (f.tab === 'control' ? '<label class="check"><input type="checkbox" id="qSD"' + (f.soloDif ? ' checked' : '') + '> Solo con diferencias</label>' : '<label class="check"><input type="checkbox" id="qPen"' + (f.pend ? ' checked' : '') + '> Solo pendientes (' + paqPendientes().length + ')</label>') + '</div><div id="qBody"></div>';
@@ -1618,6 +1660,7 @@ function pEntregar() {
   if (f.red === undefined || !REDONDEOS.some(function (r) { return r[0] === f.red; })) f.red = 100000;
   f.modo = f.modo || 'pend';
   cab('Pagar propinas', 'Registrar el pago: se reparte la caja de Playa entre los que elijas, según los días que trabajó cada uno');
+  var pendP = paqPendientes(), pendT = pendP.reduce(function (a, q) { return a + totalEfectivo(q); }, 0);
   var caja = cajaDe(f.s), pendH = f.h ? pendienteHasta(f.s, f.h) : caja, propPer = resumenSector(f.s, f.d, f.h).hizo;
   if (f.modo === 'pend') f.monto = Math.max(0, pendH); else if (f.modo === 'caja') f.monto = Math.max(0, caja); else if (f.modo === 'periodo') f.monto = Math.max(0, propPer); else f.monto = f.monto || 0;
   var clave = f.s + '|' + f.d + '|' + f.h;
@@ -1629,7 +1672,8 @@ function pEntregar() {
   filas.sort(porNombre);
   filas.forEach(function (m) { if (!it[m.id]) { var dd = diasTrabajados(m, f.d, f.h); it[m.id] = { sel: dd > 0, dias: dd, auto: dd, manual: false, v: '' }; } });
   var otros = D.empleados.filter(function (m) { return !filas.some(function (x) { return x.id === m.id; }); }).sort(porNombre);
-  var h = '<div class="bar"><div class="f"><label>Fecha de entrega</label><input type="date" id="nF" value="' + f.f + '"></div>' +
+  var h = (pendP.length ? '<div class="banner warn">⏳ <div><b>Hay ' + pendP.length + ' paquete' + (pendP.length === 1 ? '' : 's') + ' sin revisar (' + $m(pendT) + ')</b> que ya están sumados a la caja. Si después los corregís, la caja puede quedar en negativo. Conviene revisarlos antes de pagar. <button class="btn sm" id="nRevP" style="margin-left:8px">Revisar ahora</button></div></div>' : '') +
+    '<div class="bar"><div class="f"><label>Fecha de entrega</label><input type="date" id="nF" value="' + f.f + '"></div>' +
     '<div class="f"><label>Período que se paga (para contar los días)</label><div class="chips">' + [['semanaAnt', 'Semana anterior'], ['semana', 'Esta semana'], ['mesAnt', 'Mes anterior'], ['mes', 'Este mes'], ['custom', 'Elegir fechas']].map(function (q) { return '<button class="chip ' + (f.pq === q[0] ? 'on' : '') + '" data-pq="' + q[0] + '">' + q[1] + '</button>'; }).join('') + '</div></div>' +
     (f.pq === 'custom' ? '<div class="f"><label>Desde</label><input type="date" id="nD" value="' + esc(f.d) + '"></div><div class="f"><label>Hasta</label><input type="date" id="nH" value="' + esc(f.h) + '"></div>' : '') + '</div>';
   if (!maxDias) { $('#view').innerHTML = h + '<div class="banner warn">Elegí las fechas del período (desde y hasta) para calcular los días de cada uno.</div>'; enganchar(); return; }
@@ -1656,6 +1700,7 @@ function pEntregar() {
     '<div class="totbar"><div><div class="l">Participan</div><div class="v" id="tN">0</div></div><div><div class="l">Días</div><div class="v" id="tD">0</div></div><div><div class="l">Por día</div><div class="v" id="tPD" style="font-size:18px">$ 0</div></div><div><div class="l">Total a entregar</div><div class="v" id="tT">$ 0</div></div><div><div class="l">Sobrante del redondeo</div><div class="v" id="tS" style="font-size:18px">$ 0</div></div><div><div class="l">Queda en caja</div><div class="v" id="tQ" style="font-size:18px">$ 0</div></div>' +
     '<div class="f grow"><input id="nNota" placeholder="Observación (opcional)" value="' + esc(f.nota || '') + '"></div><div class="acts"><button class="btn pri lg" id="nOk" disabled>Confirmar entrega</button></div></div>';
   $('#view').innerHTML = h; enganchar();
+  if ($('#nRevP')) $('#nRevP').onclick = function () { F.pqs = Object.assign(F.pqs || {}, { tab: 'lista', pend: true }); ir('paquetes'); };
   function enganchar() {
     $('#nF').onchange = function () { f.f = this.value || hoy(); };
     $$('[data-pq]').forEach(function (b) { b.onclick = function () { f.pq = b.dataset.pq; refrescar(); }; });
@@ -1750,16 +1795,18 @@ function pCaja() {
   var vig = D.entregas.filter(function (en) { return !en.anulada; }), sobr = vig.reduce(function (a, en) { return a + (en.sobrante || 0); }, 0), ultE = vig[vig.length - 1];
   var h = '<div class="grid g2 stagger" style="margin-bottom:18px">' + sectores().map(function (s) {
     var x = S[s.id] || { inicial: 0, fIni: '', propinas: 0, entregado: 0, caja: 0 }, ing = x.inicial + x.propinas;
-    return '<div class="card sect ' + s.id + '"><div class="top"><b>💰 Caja de Playa</b><button class="btn sm" style="margin-left:auto" data-ini="' + s.id + '">' + (x.inicial ? 'Editar saldo inicial' : '+ Cargar saldo inicial') + '</button></div>' +
+    return '<div class="card sect ' + s.id + '"><div class="top"><b>💰 Caja de Playa</b><button class="btn sm pri" style="margin-left:auto" id="kArq">⚖️ Arqueo</button><button class="btn sm" data-ini="' + s.id + '">' + (x.inicial ? 'Editar saldo inicial' : '+ Cargar saldo inicial') + '</button></div>' +
       '<div class="l">En caja</div><div class="v' + (x.caja < 0 ? ' neg' : '') + '" data-cnt="' + x.caja + '">$ 0</div><div class="barra"><i data-w="' + (ing > 0 ? Math.min(100, Math.round(x.entregado / ing * 100)) : 0) + '"></i></div>' +
-      '<div class="mini" style="flex-wrap:wrap"><span>Saldo inicial <b>' + $m(x.inicial) + '</b>' + (x.fIni ? ' <span class="tiny">(' + dmy(x.fIni) + ')</span>' : '') + '</span><span>+ Propinas <b>' + $m(x.propinas) + '</b></span><span>− Entregado <b>' + $m(x.entregado) + '</b></span></div></div>';
+      '<div class="mini" style="flex-wrap:wrap"><span>Saldo inicial <b>' + $m(x.inicial) + '</b>' + (x.fIni ? ' <span class="tiny">(' + dmy(x.fIni) + ')</span>' : '') + '</span><span>+ Propinas <b>' + $m(x.propinas) + '</b></span><span>− Pagado <b>' + $m(x.entregado) + '</b></span>' + ((D.arqueos || []).length ? '<span>' + (x.ajustes >= 0 ? '+' : '−') + ' Arqueos <b>' + $m(Math.abs(x.ajustes)) + '</b> <a href="#" data-arqs style="font-size:12px">ver</a></span>' : '') + '</div></div>';
   }).join('') +
-    '<div class="card sect PLAYA"><div class="top"><b>🪙 Sobrantes del redondeo</b></div><div class="l">Quedaron en la caja por redondear a billetes</div><div class="v" data-cnt="' + sobr + '">$ 0</div>' +
-    '<div class="mini" style="flex-wrap:wrap"><span>' + vig.length + ' entrega' + (vig.length === 1 ? '' : 's') + '</span>' + (ultE ? '<span>Última: <b>' + esc(ultE.n) + '</b> ' + dmy(ultE.f) + (ultE.sobrante ? ' · sobró ' + $m(ultE.sobrante) : '') + '</span>' : '') + '<span class="tiny">Ya están incluidos en “En caja” y se reparten en la próxima entrega.</span></div></div></div>';
+    '<div class="card sect PLAYA"><div class="top"><b>🪙 Sobrante del último pago</b></div><div class="l">Quedó en la caja por redondear a billetes</div><div class="v" data-cnt="' + (ultE ? ultE.sobrante || 0 : 0) + '">$ 0</div>' +
+    '<div class="mini" style="flex-wrap:wrap"><span>' + vig.length + ' entrega' + (vig.length === 1 ? '' : 's') + '</span>' + (ultE ? '<span>Última: <b>' + esc(ultE.n) + '</b> ' + dmy(ultE.f) + (ultE.sobrante ? ' · sobró ' + $m(ultE.sobrante) : '') + '</span>' : '') + '<span class="tiny">Ya está incluido en “En caja” y se reparte en el próximo pago.</span></div></div></div>';
   var cp = chipsPeriodo(f, refrescar, true);
   h += '<div class="bar">' + cp.html + '<div class="f grow"><label>Buscar</label><input id="kQ" placeholder="Nombre del empleado" value="' + esc(f.q || '') + '"></div></div><div id="kBody"></div>';
   $('#view').innerHTML = h; cp.enganchar();
   $$('[data-ini]').forEach(function (b) { b.onclick = function () { editarSaldoInicial(b.dataset.ini); }; });
+  if ($('#kArq')) $('#kArq').onclick = arqueo;
+  $$('[data-arqs]').forEach(function (b) { b.onclick = verArqueos; });
   $('#kQ').oninput = function () { f.q = this.value; tabla(); };
   var filas = [];
   function tabla() {
@@ -1785,9 +1832,34 @@ function pCaja() {
       .concat(filas.map(function (r) { return [r.m.nombre, r.m.legajo, dmy(r.m.alta), dmy(r.m.baja), r.dias, csvNum(r.prop), csvNum(r.cobP), csvNum(r.cobT)]; })));
   };
 }
+/** Arqueo: el administrador cuenta la plata. Si no coincide con el sistema, queda un ajuste (sobrante o faltante) con motivo. */
+function arqueo() {
+  var caja = cajaDe(SEC), pend = paqPendientes();
+  modal('⚖️ Arqueo de caja', '<p class="small muted" style="margin-top:0">Contá la plata de propinas que hay físicamente. Si no coincide con el sistema, se registra un <b>ajuste</b> por la diferencia, con tu nombre, fecha, hora y motivo. No se borra nada.</p>' +
+    (pend.length ? '<div class="banner warn">⏳ <div>Hay ' + pend.length + ' paquete' + (pend.length === 1 ? '' : 's') + ' sin revisar (' + $m(pend.reduce(function (a, q) { return a + totalEfectivo(q); }, 0)) + ') que ya están en la caja del sistema. Revisalos antes si podés.</div></div>' : '') +
+    '<div class="kv" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:14px"><div><span>Según el sistema</span><b>' + $m(caja) + '</b></div><div><span>Contado</span><b id="aqC">—</b></div><div><span>Diferencia</span><b id="aqD">—</b></div></div>' +
+    '<div class="form"><div class="f"><label>¿Cuánto contaste?</label><input id="aqV" inputmode="decimal" placeholder="Ej. 150.000" style="text-align:right;font-weight:700;font-size:18px"></div><div class="f full"><label>Motivo / observación (obligatorio si hay diferencia)</label><input id="aqM" placeholder="Ej. Recuento semanal · faltante sin explicar"></div></div>',
+    [{ t: 'Cancelar' }, { t: 'Registrar arqueo', c: 'pri', fn: function (ov) {
+      var v = parseAR($('#aqV', ov).value), m = $('#aqM', ov).value.trim();
+      if (v === null || isNaN(v) || v < 0) throw new Error('Ingresá lo que contaste.');
+      var dif = v - caja;
+      if (dif !== 0 && m.length < 5) throw new Error('Explicá el motivo de la diferencia (al menos 5 letras).');
+      var a = { id: uid('AQ'), f: hoy(), ts: ahora(), contado: v, cajaAntes: caja, c: dif, motivo: m || 'Arqueo sin diferencias', quien: adminNombre() };
+      D.arqueos = D.arqueos || []; D.arqueos.push(a);
+      bitacora('ARQUEO', 'Contado ' + $m(v) + ' · sistema ' + $m(caja) + ' · ' + (dif === 0 ? 'sin diferencia' : (dif > 0 ? 'sobrante +' : 'faltante ') + $m(dif)) + ' · ' + a.motivo + ' · ' + a.quien);
+      guardar(); festejar(dif === 0 ? 'Arqueo OK' : 'Ajuste registrado'); refrescar();
+    } }]);
+  setTimeout(function () { var i = $('#aqV'); if (!i) return; i.oninput = function () { var v = parseAR(i.value), ok = v !== null && !isNaN(v); $('#aqC').textContent = ok ? $m(v) : '—'; var d = ok ? v - caja : 0; $('#aqD').textContent = ok ? (d > 0 ? 'Sobran +' : d < 0 ? 'Faltan ' : 'Coincide ') + (d ? $m(Math.abs(d)) : '✓') : '—'; $('#aqD').style.color = d < 0 ? 'var(--err)' : d > 0 ? '#b45309' : 'var(--ok)'; }; }, 30);
+}
+function verArqueos(ev) {
+  if (ev) ev.preventDefault();
+  var l = (D.arqueos || []).slice().reverse();
+  modal('Arqueos de caja', '<table class="t"><thead><tr><th>Fecha y hora</th><th class="num">Sistema</th><th class="num">Contado</th><th class="num">Ajuste</th><th>Motivo</th></tr></thead><tbody>' +
+    (l.length ? l.map(function (a) { return '<tr><td class="small">' + dmy(a.ts) + ' ' + String(a.ts).slice(11, 16) + '<div class="tiny muted">' + esc(a.quien) + '</div></td><td class="num">' + $m(a.cajaAntes) + '</td><td class="num">' + $m(a.contado) + '</td><td class="num b" style="color:' + (a.c < 0 ? 'var(--err)' : a.c > 0 ? '#b45309' : 'inherit') + '">' + (a.c > 0 ? '+' : '') + $m(a.c) + '</td><td class="small">' + esc(a.motivo) + '</td></tr>'; }).join('') : '<tr><td colspan="5">Sin arqueos.</td></tr>') + '</tbody></table>', [{ t: 'Cerrar' }], 'lg');
+}
 function editarSaldoInicial(s) {
   var cf = cajaCfg(s);
-  modal('Saldo inicial de la caja', '<p class="small muted" style="margin-top:0">La plata de propinas que ya tenés en la caja de Playa antes de empezar a cargar en el sistema. Se suma a lo que se reparte.</p><div class="form"><div class="f"><label>Importe en caja</label><input id="iV" inputmode="decimal" value="' + (cf.inicial ? miles(cf.inicial) : '') + '" placeholder="Ej. 150.000" style="text-align:right;font-weight:700;font-size:17px"></div><div class="f"><label>¿Al día de?</label><input type="date" id="iF" value="' + (cf.fecha || hoy()) + '"></div><div class="f full"><label>Nota (opcional)</label><input id="iN" placeholder="Ej. Recuento de caja"></div></div>' +
+  modal('Saldo inicial de la caja', '<p class="small muted" style="margin-top:0">Solo para arrancar: la plata de propinas que había en la caja <b>antes</b> de empezar a usar el sistema. Se suma a lo que se reparte.</p>' + (D.entregas.length || Object.keys(D.cargas).length ? '<div class="banner warn">⚠️ <div>Ya hay movimientos cargados. <b>No uses esto para un recuento</b>: si ponés lo que contaste hoy, las propinas quedan sumadas dos veces. Cambialo solo si el saldo de arranque estaba mal.</div></div>' : '') + '<div class="form"><div class="f"><label>Importe en caja</label><input id="iV" inputmode="decimal" value="' + (cf.inicial ? miles(cf.inicial) : '') + '" placeholder="Ej. 150.000" style="text-align:right;font-weight:700;font-size:17px"></div><div class="f"><label>¿Al día de?</label><input type="date" id="iF" value="' + (cf.fecha || hoy()) + '"></div><div class="f full"><label>Nota (opcional)</label><input id="iN" placeholder="Ej. Plata que había al empezar"></div></div>' +
     (cf.hist && cf.hist.length ? '<div class="tiny muted mt">Cambios anteriores: ' + cf.hist.slice().reverse().slice(0, 4).map(function (z) { return dmy(z[0]) + ': ' + $m(z[1]) + ' → ' + $m(z[2]) + (z[4] ? ' (' + esc(z[4]) + ')' : ''); }).join(' · ') + '</div>' : ''),
     [{ t: 'Cancelar' }, { t: 'Guardar', c: 'pri', fn: function (ov) {
       var v = parseAR($('#iV', ov).value); if (v === null) v = 0;
@@ -1820,6 +1892,8 @@ function reporteDiario(o) {
   if (o.detalle !== false) ps.forEach(function (p) { L.push(lin(emp(p).nombre, por[p])); });
   else if (ps.length) L.push('👥 ' + ps.length + ' empleado' + (ps.length === 1 ? '' : 's') + ' con propina');
   L.push('', LINEA, '💰 TOTAL DEL DÍA: ' + $w(tot));
+  var pendD = cargasDia(o.f).filter(function (c) { return c.paq && c.estado === 'pend'; }).reduce(function (a, c) { return a + c.c; }, 0);
+  if (pendD) L.push('⏳ De eso, ' + $w(pendD) + ' son de paquetes sin revisar');
   return { titulo: 'Reporte diario', texto: L.join('\n'), vacio: !ps.length, comp: function () { comprobanteDia(o.f); },
     csv: [['Fecha', 'Empleado', 'Legajo', 'Cargas', 'Propina']].concat(ps.map(function (p) { return [dmy(o.f), emp(p).nombre, emp(p).legajo, n[p], csvNum(por[p])]; })).concat([['', 'TOTAL', '', '', csvNum(tot)]]) };
 }
@@ -1843,6 +1917,8 @@ function reportePeriodo(o, tipo) {
       if (meses.length) B.push('🗓️ POR MES', meses.join('\n'), '');
     }
     B.push(LINEA, '💰 TOTAL: ' + $w(r.hizo), '💵 ENTREGADO: ' + $w(r.pagado), '📌 PENDIENTE: ' + $w(r.pend));
+    var ajP = (D.arqueos || []).filter(function (a) { return a.c && enRango(a.f, o.d, o.h); }).reduce(function (a, x) { return a + x.c; }, 0);
+    if (ajP) B.push('⚖️ AJUSTE POR ARQUEO: ' + (ajP > 0 ? '+' : '') + $w(ajP));
     if (r.pendAntes > 0) B.push('🔁 Saldo anterior en caja: ' + $w(r.pendAntes), '🧾 TOTAL A REPARTIR: ' + $w(r.pend + r.pendAntes));
     bloques.push(B.join('\n'));
     G.hizo += r.hizo; G.pag += r.pagado; G.pend += r.pend; G.antes += r.pendAntes; GS[s] = r;
@@ -1962,7 +2038,7 @@ function pHistorial() {
         }).join('') : '<tr><td colspan="8"><div class="empty"><div class="ic">📭</div><b>Sin entregas en el período</b></div></td></tr>') + '</tbody></table></div></div>';
       $$('[data-rep]').forEach(function (b) { b.onclick = function () { verReporte(reporteEntrega(D.entregas.find(function (x) { return x.id === b.dataset.rep; }))); }; });
       $$('[data-compe]').forEach(function (b) { b.onclick = function () { comprobanteEntrega(D.entregas.find(function (x) { return x.id === b.dataset.compe; })); }; });
-      $$('[data-anu]').forEach(function (b) { b.onclick = function () { var en = D.entregas.find(function (x) { return x.id === b.dataset.anu; }); modal('Anular entrega ' + en.n, '<div class="banner warn">No se borra: queda marcada como anulada y los importes vuelven al saldo de cada empleado.</div><p>' + en.items.length + ' empleados · ' + $m(en.total) + ' · ' + dmy(en.f) + '</p><div class="f"><label>Motivo</label><input id="anM"></div>', [{ t: 'Cancelar' }, { t: 'Anular entrega', c: 'dan s', fn: function (ov) { anularEntrega(en.id, $('#anM', ov).value); toast('Entrega ' + en.n + ' anulada. Los saldos se recalcularon.', 'ok'); refrescar(); } }]); }; });
+      $$('[data-anu]').forEach(function (b) { b.onclick = function () { var en = D.entregas.find(function (x) { return x.id === b.dataset.anu; }); modal('Anular entrega ' + en.n, '<div class="banner warn">No se borra: queda marcada como anulada y los importes vuelven a la caja.</div><p>' + en.items.length + ' empleados · ' + $m(en.total) + ' · ' + dmy(en.f) + '</p><div class="f"><label>Motivo</label><input id="anM"></div>', [{ t: 'Cancelar' }, { t: 'Anular entrega', c: 'dan s', fn: function (ov) { anularEntrega(en.id, $('#anM', ov).value); toast('Entrega ' + en.n + ' anulada. Los saldos se recalcularon.', 'ok'); refrescar(); } }]); }; });
     } else {
       var L = D.log.filter(function (x) { return enRango(x[0].slice(0, 10), f.d, f.h) && (!q || (x[1] + ' ' + x[2]).toLowerCase().indexOf(q) >= 0); }).slice().reverse();
       box.innerHTML = '<div class="card"><div class="bd p0 tw maxh"><table class="t"><thead><tr><th>Fecha y hora</th><th>Acción</th><th>Detalle</th></tr></thead><tbody>' + (L.length ? L.slice(0, 2500).map(function (x) { return '<tr><td style="white-space:nowrap">' + dmy(x[0]) + ' ' + x[0].slice(11, 16) + '</td><td class="small b">' + esc(x[1]) + '</td><td class="small">' + esc(x[2]) + '</td></tr>'; }).join('') : '<tr><td colspan="3"><div class="empty"><b>Sin registros en el período</b></div></td></tr>') + '</tbody></table></div></div>';
@@ -2074,7 +2150,9 @@ $('#fileRestore').onchange = function () {
   rd.onload = function () {
     var x; try { x = migrar(JSON.parse(rd.result)); } catch (e) { toast('No se pudo leer la copia: ' + e.message, 'err'); return; }
     confirmar('Restaurar copia', '<p><b>' + esc(file.name) + '</b></p><div class="kv"><div><span>Empleados</span><b>' + x.empleados.length + '</b></div><div><span>Propinas</span><b>' + Object.keys(x.cargas).length + '</b></div><div><span>Entregas</span><b>' + x.entregas.length + '</b></div><div><span>Último cambio</span><b style="font-size:14px">' + esc(x.meta.cambio ? dmy(x.meta.cambio) : '—') + '</b></div></div><div class="banner warn mt">Los datos actuales se reemplazan por los de la copia.</div>', 'Restaurar').then(function (ok) {
-      if (!ok) return; D = x; bitacora('RESPALDO', 'Datos restaurados desde ' + file.name); guardar(); guardarAhora(); festejar('Copia restaurada'); ir('inicio');
+      if (!ok) return;
+      if (enNube()) { var evs = D.eventos, pqs = D.paquetes; x.eventos = evs; x.paquetes = pqs; x.cargas = construirCargas(evs, pqs); unirDocs(x, D); }
+      D = x; bitacora('RESPALDO', 'Datos restaurados desde ' + file.name); guardar(); guardarAhora(); festejar('Copia restaurada'); ir('inicio');
     });
   };
   rd.readAsText(file);
@@ -2084,7 +2162,7 @@ $('#fileRestore').onchange = function () {
 var PANT = { playa: pCargar, paquete: pPaquete, paquetes: pPaquetes, inicio: pInicio, cargar: pCargar, entregar: pEntregar, caja: pCaja, reportes: pReportes, historial: pHistorial, empleados: pEmpleados, ajustes: pAjustes };
 window.addEventListener('beforeunload', function (ev) { if (tG) guardarAhora(); if (sucio && sucio()) { ev.preventDefault(); ev.returnValue = ''; } });
 try { var bc = new BroadcastChannel('propinasBeraza'); bc.onmessage = function (ev) { if (ev.data === 'hola') bc.postMessage('ya'); else if (ev.data === 'ya') toast('El sistema ya está abierto en otra pestaña. Usá una sola para no pisar datos.', 'err'); }; bc.postMessage('hola'); } catch (e) { /* sin BroadcastChannel */ }
-window.__propinas = { get D() { return D; }, calc: calc, cajaDe: cajaDe, resumenSector: resumenSector, pendienteHasta: pendienteHasta, diasTrabajados: diasTrabajados, repartir: repartir, desglose: desglose, textoBilletes: textoBilletes, registrarEntrega: registrarEntrega, anularEntrega: anularEntrega, guardarEmpleado: guardarEmpleado, reporteDiario: reporteDiario, reportePeriodo: reportePeriodo, reporteEntrega: reporteEntrega, migrar: migrar, guardarAhora: guardarAhora, ir: ir, filasMovimientos: filasMovimientos, carpeta: function () { return CARP; }, escribirCarpeta: escribirCarpeta, nube: function () { return NUBE; }, subirNube: subirNube, registrarCarga: registrarCarga, registrarPaquete: registrarPaquete, turnoYFecha: function () { return turnoYFecha(); }, registrarObsPaquete: registrarObsPaquete, estadoPaq: estadoPaq, totalEfectivo: totalEfectivo, ticketPaquete: ticketPaquete, controlDia: controlDia, paqList: paqList, registrarCorreccion: registrarCorreccion, construirCargas: construirCargas, comprobanteEntrega: comprobanteEntrega, comprobanteDia: comprobanteDia, generarReporte: function (r) { return generarReporte(r); }, playa: function () { return PL; } };
+window.__propinas = { get D() { return D; }, calc: calc, cajaDe: cajaDe, resumenSector: resumenSector, pendienteHasta: pendienteHasta, diasTrabajados: diasTrabajados, repartir: repartir, desglose: desglose, textoBilletes: textoBilletes, registrarEntrega: registrarEntrega, anularEntrega: anularEntrega, guardarEmpleado: guardarEmpleado, reporteDiario: reporteDiario, reportePeriodo: reportePeriodo, reporteEntrega: reporteEntrega, migrar: migrar, guardarAhora: guardarAhora, ir: ir, filasMovimientos: filasMovimientos, carpeta: function () { return CARP; }, escribirCarpeta: escribirCarpeta, nube: function () { return NUBE; }, subirNube: subirNube, registrarCarga: registrarCarga, registrarPaquete: registrarPaquete, arqueo: arqueo, csvTexto: csvTexto, unirDocs: unirDocs, turnoYFecha: function () { return turnoYFecha(); }, registrarObsPaquete: registrarObsPaquete, estadoPaq: estadoPaq, totalEfectivo: totalEfectivo, ticketPaquete: ticketPaquete, controlDia: controlDia, paqList: paqList, registrarCorreccion: registrarCorreccion, construirCargas: construirCargas, comprobanteEntrega: comprobanteEntrega, comprobanteDia: comprobanteDia, generarReporte: function (r) { return generarReporte(r); }, playa: function () { return PL; } };
 if (/^https?:$/.test(location.protocol)) document.body.classList.add('bloq');
 iniciarAlmacenamiento().then(function () { REV++; pie(); ir('inicio'); return carpetaIniciar().then(function () { pie(); if (ACT === 'inicio' || ACT === 'ajustes') refrescar(); }).then(nubeIniciar).then(function () { document.body.classList.remove('bloq'); menu(); pie(); if (esPlaya()) ir('playa'); else refrescar(); }); }).catch(function (e) { document.body.classList.remove('bloq'); guardadoOK = false; pie(); ir('inicio'); toast('No se pudieron leer los datos guardados: ' + e.message, 'err'); });
 })();
