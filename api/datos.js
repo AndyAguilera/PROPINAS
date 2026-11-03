@@ -2,16 +2,17 @@
 // Variables de entorno en Vercel:
 //   KV_REST_API_URL / KV_REST_API_TOKEN  (las crea solas la base Upstash Redis al conectarla al proyecto)
 //   CLAVE_ADMIN  contraseña del usuario ADMINISTRADOR (acceso total)
-//   CLAVE_PLAYA  contraseña del usuario PLAYA (compartido: solo carga propinas del día)
+//   CLAVE_PLAYA  contraseña del usuario PLAYA (compartido: solo arma paquetes de efectivo)
 //
 // Las propinas se guardan como movimientos que nunca se borran (lista propinas:ev):
 //   alta: { id, t:'alta', f, p, c, ts, por:'PLAYA'|'ADMIN', quien }
 //   corr: { id, t:'corr', ref, f, p, pAntes, c, antes, ts, por:'ADMIN', quien, motivo }
 // La fecha y hora las pone el servidor (hora de Argentina). PLAYA solo puede cargar en el día de hoy.
 //
-// Paquetes de efectivo armados (lista propinas:pq). NO son pagos: no tocan propinas ni acumulados.
+// Paquetes de efectivo armados (lista propinas:pq). Suman a la caja de propinas (no son pagos) y quedan
+// pendientes hasta que el administrador los aprueba o los corrige.
 //   paq: { id, t:'paq', n, f, turno:'M'|'T'|'N', ts, items:[{p,nombre,c}], total, por, quien }
-//   obs: { id, t:'obs', ref, ts, quien, texto, p?, c? }   (observación o corrección auditada del administrador)
+//   obs: { id, t:'obs', ref, n, accion:'ok'|'corr'|'obs', ts, quien, texto, cambios?:[{p,antes,c}] }
 const crypto = require('crypto');
 
 // Acepta cualquier prefijo que ponga Vercel al conectar la base (KV_, STORAGE_, etc.).
@@ -78,7 +79,8 @@ module.exports = async function handler(req, res) {
         const hoy = hoyAR();
         const r = await redis([['GET', K.emp], ['HGETALL', K.tot], ['HGETALL', dia(hoy)], ['LRANGE', evd(hoy), 0, -1], ['LRANGE', K.pq, -80, -1]]);
         const paquetes = (r[4] || []).map(x => JSON.parse(x)).filter(x => x.t === 'paq' && String(x.ts).slice(0, 10) === hoy);
-        const emp = r[0] ? JSON.parse(r[0]) : { empresa: '', empleados: [] };
+        let emp = r[0] ? JSON.parse(r[0]) : null;
+        if (!emp) { const [d] = await redis([['GET', K.datos]]); const x = d ? JSON.parse(d) : null; emp = { empresa: (x && x.config && x.config.empresa && x.config.empresa.nombre) || '', empleados: ((x && x.empleados) || []).filter(m => m.activo && m.s === 'PLAYA').map(m => ({ id: m.id, nombre: m.nombre, legajo: m.legajo || '' })) }; }
         const altas = (r[3] || []).map(x => JSON.parse(x));
         let actual = [];
         if (altas.length) actual = (await redis([['HMGET', K.c].concat(altas.map(a => a.id))]))[0] || [];
@@ -100,7 +102,8 @@ module.exports = async function handler(req, res) {
     if (req.method !== 'PUT' && req.method !== 'POST') { res.setHeader('Allow', 'GET, PUT, POST'); return enviar(res, 405, { error: 'Método no permitido.' }); }
     const b = await leerCuerpo(req);
 
-    /* ---------- nueva propina (ADMIN o PLAYA) */
+    /* ---------- nueva propina (solo ADMIN: PLAYA únicamente arma paquetes) */
+    if (op === 'carga' && rol === 'playa') return enviar(res, 403, { error: 'El usuario PLAYA solo arma paquetes. Las propinas las carga el administrador.' });
     if (op === 'carga') {
       const c = Number(b.c);
       if (!esId(b.id) || !esId(b.p)) return enviar(res, 400, { error: 'Datos inválidos.' });
@@ -166,18 +169,29 @@ module.exports = async function handler(req, res) {
       return enviar(res, 200, { ev, n: r[0] });
     }
 
-    /* ---------- observación o corrección auditada de un paquete (el comprobante original no cambia) */
+    /* ---------- revisión del administrador sobre un paquete (el comprobante original no cambia)
+     * accion: 'ok' (está bien) · 'corr' (corrige importes: mueve la caja) · 'obs' (solo una nota) */
     if (op === 'paqobs') {
-      const texto = String(b.texto || '').trim();
-      if (!esId(b.id) || !esId(b.ref) || texto.length < 5) return enviar(res, 400, { error: 'Escribí la observación (al menos 5 letras).' });
-      const todos = (await redis([['LRANGE', K.pq, 0, -1]]))[0] || [];
-      const paq = todos.map(x => JSON.parse(x)).find(x => x.t === 'paq' && x.id === b.ref);
+      const accion = ['ok', 'corr', 'obs'].includes(b.accion) ? b.accion : (b.p ? 'corr' : 'obs');
+      const texto = String(b.texto || '').trim() || (accion === 'ok' ? 'Revisado: está OK' : '');
+      if (!esId(b.id) || !esId(b.ref)) return enviar(res, 400, { error: 'Datos inválidos.' });
+      if (accion !== 'ok' && texto.length < 5) return enviar(res, 400, { error: accion === 'corr' ? 'Indicá el motivo de la corrección (al menos 5 letras).' : 'Escribí la observación (al menos 5 letras).' });
+      const todos = ((await redis([['LRANGE', K.pq, 0, -1]]))[0] || []).map(x => JSON.parse(x));
+      const paq = todos.find(x => x.t === 'paq' && x.id === b.ref);
       if (!paq) return enviar(res, 404, { error: 'El paquete no existe.' });
-      const obs = { id: b.id, t: 'obs', ref: b.ref, n: paq.n, ts: ahoraAR(), quien: String(b.quien || 'Administrador').slice(0, 60), texto: texto.slice(0, 500) };
-      if (b.p !== undefined && b.p !== '') {
-        const c = Number(b.c);
-        if (!paq.items.some(x => x.p === b.p) || !(c >= 0) || Math.round(c) !== c) return enviar(res, 400, { error: 'Corrección inválida.' });
-        obs.p = b.p; obs.c = c; obs.antes = paq.items.find(x => x.p === b.p).c;
+      const act = {}; paq.items.forEach(i => { act[i.p] = i.c; });
+      todos.filter(x => x.t === 'obs' && x.ref === paq.id).forEach(o => { if (o.p) act[o.p] = o.c; (o.cambios || []).forEach(c => { act[c.p] = c.c; }); });
+      const obs = { id: b.id, t: 'obs', ref: b.ref, n: paq.n, accion, ts: ahoraAR(), quien: String(b.quien || 'Administrador').slice(0, 60), texto: texto.slice(0, 500) };
+      if (accion === 'corr') {
+        const pedidos = Array.isArray(b.cambios) ? b.cambios : (b.p ? [{ p: b.p, c: b.c }] : []);
+        const cambios = [];
+        for (const x of pedidos) {
+          const c = Number(x.c);
+          if (!(x.p in act) || !(c >= 0) || Math.round(c) !== c || c > MAX_CARGA) return enviar(res, 400, { error: 'Corrección inválida.' });
+          if (c !== act[x.p]) cambios.push({ p: x.p, antes: act[x.p], c });
+        }
+        if (!cambios.length) return enviar(res, 400, { error: 'No hay cambios de importe.' });
+        obs.cambios = cambios;
       }
       const [nuevo] = await redis([['HSETNX', K.ids, b.id, '1']]);
       if (!nuevo) return enviar(res, 200, { dup: true });
