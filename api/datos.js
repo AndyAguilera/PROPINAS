@@ -41,7 +41,7 @@ function rolDe(usuario, clave) {
   if ((u === 'playa' || u === '') && CLAVES.playa && igual(clave, CLAVES.playa)) return 'playa';
   return '';
 }
-function enviar(res, st, obj) { res.statusCode = st; res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.setHeader('Cache-Control', 'no-store'); res.end(JSON.stringify(obj)); }
+function enviar(res, st, obj) { obj.ahora = ahoraAR(); res.statusCode = st; res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.setHeader('Cache-Control', 'no-store'); res.end(JSON.stringify(obj)); }
 async function leerCuerpo(req) {
   const b = req.body;
   if (b !== undefined && b !== null && b !== '') { if (typeof b === 'string') return JSON.parse(b); if (Buffer.isBuffer(b)) return JSON.parse(b.toString('utf8')); return b; }
@@ -51,6 +51,12 @@ async function leerCuerpo(req) {
 const ar = () => new Date(Date.now() - 3 * 3600 * 1000).toISOString();
 const hoyAR = () => ar().slice(0, 10);
 const ahoraAR = () => ar().slice(0, 19).replace('T', ' ');
+/** Turno actual (hora Argentina): Mañana 06:30–14:30, Tarde 14:30–22:30, Noche 22:30–06:30 con la fecha del día que empieza a las 00:00. */
+function turnoAR() {
+  const a = ar(), min = Number(a.slice(11, 13)) * 60 + Number(a.slice(14, 16)), f0 = a.slice(0, 10);
+  if (min >= 1350) return { turno: 'N', f: new Date(Date.parse(f0 + 'T12:00:00Z') + 86400000).toISOString().slice(0, 10) };
+  return { turno: min < 390 ? 'N' : min < 870 ? 'M' : 'T', f: f0 };
+}
 const esFecha = f => /^\d{4}-\d{2}-\d{2}$/.test(f || '');
 const esId = x => typeof x === 'string' && /^[\w|\-.:]{1,80}$/.test(x);
 const hash = arr => { const o = {}; for (let i = 0; arr && i < arr.length; i += 2) o[arr[i]] = arr[i + 1]; return o; };
@@ -64,9 +70,11 @@ module.exports = async function handler(req, res) {
     if (!lista) return enviar(res, 503, { error: 'La nube no está configurada: falta conectar la base Upstash Redis o cargar CLAVE_ADMIN en Vercel.' });
 
     const ip = String(req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || '').split(',')[0].trim() || 'sin-ip';
-    const kf = 'propinas:fallos:' + ip;
-    const clave = req.headers['x-clave'] ? decodeURIComponent(String(req.headers['x-clave'])) : '';
-    const usuario = String(req.headers['x-usuario'] || '');
+    let clave = ''; try { clave = req.headers['x-clave'] ? decodeURIComponent(String(req.headers['x-clave'])) : ''; } catch (e) { clave = ''; }
+    const usuario = String(req.headers['x-usuario'] || '').toLowerCase() === 'playa' ? 'playa' : 'admin';
+    // sin contraseña no se toca la base (así nadie de afuera gasta el cupo gratis)
+    if (!clave) return enviar(res, 401, { error: 'Usuario o contraseña incorrectos.' });
+    const kf = 'propinas:fallos:' + usuario + ':' + ip; // el bloqueo es por usuario: un error en ADMIN no deja afuera a PLAYA
     const [fallos] = await redis([['GET', kf]]);
     if (Number(fallos) >= MAX_FALLOS) return enviar(res, 429, { error: 'Demasiados intentos fallidos. Probá de nuevo en 15 minutos.' });
     const rol = rolDe(usuario, clave);
@@ -76,16 +84,13 @@ module.exports = async function handler(req, res) {
     /* ---------- lectura */
     if (req.method === 'GET') {
       if (rol === 'playa') {
-        const hoy = hoyAR();
-        const r = await redis([['GET', K.emp], ['HGETALL', K.tot], ['HGETALL', dia(hoy)], ['LRANGE', evd(hoy), 0, -1], ['LRANGE', K.pq, -80, -1]]);
-        const paquetes = (r[4] || []).map(x => JSON.parse(x)).filter(x => x.t === 'paq' && String(x.ts).slice(0, 10) === hoy);
+        // PLAYA solo recibe los empleados habilitados y los paquetes del día del turno actual (nada de propinas ni acumulados)
+        const tf = turnoAR();
+        const r = await redis([['GET', K.emp], ['LRANGE', K.pq, -150, -1]]);
+        const paquetes = (r[1] || []).map(x => JSON.parse(x)).filter(x => x.t === 'paq' && x.f === tf.f);
         let emp = r[0] ? JSON.parse(r[0]) : null;
         if (!emp) { const [d] = await redis([['GET', K.datos]]); const x = d ? JSON.parse(d) : null; emp = { empresa: (x && x.config && x.config.empresa && x.config.empresa.nombre) || '', empleados: ((x && x.empleados) || []).filter(m => m.activo && m.s === 'PLAYA').map(m => ({ id: m.id, nombre: m.nombre, legajo: m.legajo || '' })) }; }
-        const altas = (r[3] || []).map(x => JSON.parse(x));
-        let actual = [];
-        if (altas.length) actual = (await redis([['HMGET', K.c].concat(altas.map(a => a.id))]))[0] || [];
-        const cargas = altas.map((a, i) => { const v = actual[i] ? JSON.parse(actual[i]) : null; return { id: a.id, p: v ? v.p : a.p, pOrig: a.p, c: v ? v.c : a.c, orig: a.c, ts: a.ts, por: a.por }; });
-        return enviar(res, 200, { rol, hoy, ahora: ahoraAR(), empresa: emp.empresa, empleados: emp.empleados, tot: num(hash(r[1])), dia: num(hash(r[2])), cargas, paquetes });
+        return enviar(res, 200, { rol, hoy: tf.f, turno: tf.turno, empresa: emp.empresa, empleados: emp.empleados, tot: {}, dia: {}, cargas: [], paquetes });
       }
       const desde = Math.max(0, parseInt(q.get('desde') || '0', 10) || 0);
       if (q.has('meta')) { const r = await redis([['MGET', K.rev, K.cambio], ['LLEN', K.ev], ['LLEN', K.pq]]); return enviar(res, 200, { rol, rev: Number(r[0][0] || 0), cambio: r[0][1] || '', n: r[1], npq: r[2] }); }
@@ -123,14 +128,11 @@ module.exports = async function handler(req, res) {
 
     /* ---------- paquete de efectivo armado (ADMIN o PLAYA). No es un pago. */
     if (op === 'paquete') {
-      if (rol === 'playa') { // PLAYA no elige: fecha y turno salen de la hora de Argentina
-        const a = ar(), min = Number(a.slice(11, 13)) * 60 + Number(a.slice(14, 16)), f0 = a.slice(0, 10);
-        if (min < 340) { b.turno = 'N'; b.f = new Date(Date.parse(f0 + 'T12:00:00Z') - 86400000).toISOString().slice(0, 10); }
-        else { b.turno = min < 820 ? 'M' : min < 1300 ? 'T' : 'N'; b.f = f0; }
-      }
+      if (rol === 'playa') { const tf = turnoAR(); b.turno = tf.turno; b.f = tf.f; } // PLAYA no elige: fecha y turno salen de la hora de Argentina
       if (!esId(b.id) || !['M', 'T', 'N'].includes(b.turno)) return enviar(res, 400, { error: 'Elegí el turno.' });
       const hoy = hoyAR();
-      if (!esFecha(b.f) || b.f > hoy) return enviar(res, 400, { error: 'Fecha inválida.' });
+      const manana = new Date(Date.parse(hoy + 'T12:00:00Z') + 86400000).toISOString().slice(0, 10);
+      if (!esFecha(b.f) || b.f > manana) return enviar(res, 400, { error: 'Fecha inválida.' }); // la noche (desde 22:30) ya va con la fecha de mañana
       if (rol === 'playa' && b.f < new Date(Date.parse(hoy + 'T12:00:00Z') - 3 * 86400000).toISOString().slice(0, 10)) return enviar(res, 400, { error: 'Solo se pueden armar paquetes de los últimos 3 días.' });
       const items = Array.isArray(b.items) ? b.items : [];
       if (!items.length) return enviar(res, 400, { error: 'Agregá al menos un empleado.' });
@@ -138,6 +140,7 @@ module.exports = async function handler(req, res) {
       const lista = e ? JSON.parse(e).empleados : [], vistos = {};
       const limpios = [];
       for (const it of items) {
+        if (!it || typeof it !== 'object') return enviar(res, 400, { error: 'Datos inválidos.' });
         const c = Number(it.c);
         if (!esId(it.p) || vistos[it.p]) return enviar(res, 400, { error: 'Empleado repetido o inválido.' });
         vistos[it.p] = 1;
@@ -147,7 +150,10 @@ module.exports = async function handler(req, res) {
         limpios.push({ p: it.p, nombre: m ? m.nombre : String(it.nombre || '').slice(0, 80), c });
       }
       const [nuevo] = await redis([['HSETNX', K.ids, b.id, '1']]);
-      if (!nuevo) return enviar(res, 200, { dup: true });
+      if (!nuevo) { // reintento del mismo paquete (por ejemplo, se cortó internet): se devuelve el ya guardado
+        const ya = (((await redis([['LRANGE', K.pq, -300, -1]]))[0]) || []).map(x => JSON.parse(x)).find(x => x.t === 'paq' && x.id === b.id);
+        if (ya) return enviar(res, 200, { paq: ya, dup: true });
+      }
       const [n] = await redis([['INCR', K.pqseq]]);
       const paq = { id: b.id, t: 'paq', n, f: b.f, turno: b.turno, ts: ahoraAR(), items: limpios, total: limpios.reduce((a, x) => a + x.c, 0), por: rol === 'playa' ? 'PLAYA' : 'ADMIN', quien: rol === 'playa' ? 'Usuario PLAYA' : String(b.quien || 'Administrador').slice(0, 60) };
       const r = await redis([['RPUSH', K.pq, JSON.stringify(paq)]]);
@@ -184,15 +190,16 @@ module.exports = async function handler(req, res) {
       const todos = ((await redis([['LRANGE', K.pq, 0, -1]]))[0] || []).map(x => JSON.parse(x));
       const paq = todos.find(x => x.t === 'paq' && x.id === b.ref);
       if (!paq) return enviar(res, 404, { error: 'El paquete no existe.' });
-      const act = {}; paq.items.forEach(i => { act[i.p] = i.c; });
+      const act = Object.create(null); paq.items.forEach(i => { act[i.p] = i.c; });
       todos.filter(x => x.t === 'obs' && x.ref === paq.id).forEach(o => { if (o.p) act[o.p] = o.c; (o.cambios || []).forEach(c => { act[c.p] = c.c; }); });
       const obs = { id: b.id, t: 'obs', ref: b.ref, n: paq.n, accion, ts: ahoraAR(), quien: String(b.quien || 'Administrador').slice(0, 60), texto: texto.slice(0, 500) };
       if (accion === 'corr') {
         const pedidos = Array.isArray(b.cambios) ? b.cambios : (b.p ? [{ p: b.p, c: b.c }] : []);
         const cambios = [];
         for (const x of pedidos) {
+          if (!x || !esId(x.p)) return enviar(res, 400, { error: 'Corrección inválida.' });
           const c = Number(x.c);
-          if (!(x.p in act) || !(c >= 0) || Math.round(c) !== c || c > MAX_CARGA) return enviar(res, 400, { error: 'Corrección inválida.' });
+          if (!Object.prototype.hasOwnProperty.call(act, x.p) || !(c >= 0) || Math.round(c) !== c || c > MAX_CARGA) return enviar(res, 400, { error: 'Corrección inválida.' });
           if (c !== act[x.p]) cambios.push({ p: x.p, antes: act[x.p], c });
         }
         if (!cambios.length) return enviar(res, 400, { error: 'No hay cambios de importe.' });
