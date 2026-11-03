@@ -718,7 +718,7 @@ window.addEventListener('online', function () { if (NUBE.rol === 'admin' && nube
 /** Revisa cambios en la nube: el administrador ve al momento lo que carga PLAYA. */
 var tS = null, sondeoListo = false;
 function iniciarSondeo() {
-  clearInterval(tS); tS = setInterval(revisarNube, 60000);
+  clearInterval(tS); if (!esPlaya()) tS = setInterval(revisarNube, 120000); // cuida el cupo gratis de la base: PLAYA se actualiza al volver a la pestaña o con el botón
   if (!sondeoListo) { sondeoListo = true; document.addEventListener('visibilitychange', function () { if (!document.hidden) revisarNube(); }); }
 }
 function revisarNube() {
