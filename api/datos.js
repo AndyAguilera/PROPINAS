@@ -12,7 +12,8 @@
 // Paquetes de efectivo armados (lista propinas:pq). Suman a la caja de propinas (no son pagos) y quedan
 // pendientes hasta que el administrador los aprueba o los corrige.
 //   paq: { id, t:'paq', n, f, turno:'M'|'T'|'N', ts, items:[{p,nombre,c}], total, por, quien }
-//   obs: { id, t:'obs', ref, n, accion:'ok'|'corr'|'obs', ts, quien, texto, cambios?:[{p,antes,c}] }
+//   obs: { id, t:'obs', ref, n, accion:'ok'|'corr'|'obs'|'anular', ts, quien, texto, cambios?:[{p,antes,c}] }
+//   'anular': el paquete queda con su número (la numeración sigue correlativa) pero deja de sumar a la caja.
 const crypto = require('crypto');
 
 // Acepta cualquier prefijo que ponga Vercel al conectar la base (KV_, STORAGE_, etc.).
@@ -87,7 +88,8 @@ module.exports = async function handler(req, res) {
         // PLAYA solo recibe los empleados habilitados y los paquetes del día del turno actual (nada de propinas ni acumulados)
         const tf = turnoAR();
         const r = await redis([['GET', K.emp], ['LRANGE', K.pq, -150, -1]]);
-        const paquetes = (r[1] || []).map(x => JSON.parse(x)).filter(x => x.t === 'paq' && x.f === tf.f);
+        const lst = (r[1] || []).map(x => JSON.parse(x)), anul = new Set(lst.filter(x => x.t === 'obs' && x.accion === 'anular').map(x => x.ref));
+        const paquetes = lst.filter(x => x.t === 'paq' && x.f === tf.f && !anul.has(x.id)); // los anulados no se muestran en la playa
         let emp = r[0] ? JSON.parse(r[0]) : null;
         if (!emp) { const [d] = await redis([['GET', K.datos]]); const x = d ? JSON.parse(d) : null; emp = { empresa: (x && x.config && x.config.empresa && x.config.empresa.nombre) || '', empleados: ((x && x.empleados) || []).filter(m => m.activo && m.s === 'PLAYA').map(m => ({ id: m.id, nombre: m.nombre, legajo: m.legajo || '' })) }; }
         return enviar(res, 200, { rol, hoy: tf.f, turno: tf.turno, empresa: emp.empresa, empleados: emp.empleados, tot: {}, dia: {}, cargas: [], paquetes });
@@ -183,15 +185,17 @@ module.exports = async function handler(req, res) {
     /* ---------- revisión del administrador sobre un paquete (el comprobante original no cambia)
      * accion: 'ok' (está bien) · 'corr' (corrige importes: mueve la caja) · 'obs' (solo una nota) */
     if (op === 'paqobs') {
-      const accion = ['ok', 'corr', 'obs'].includes(b.accion) ? b.accion : (b.p ? 'corr' : 'obs');
+      const accion = ['ok', 'corr', 'obs', 'anular'].includes(b.accion) ? b.accion : (b.p ? 'corr' : 'obs');
       const texto = String(b.texto || '').trim() || (accion === 'ok' ? 'Revisado: está OK' : '');
       if (!esId(b.id) || !esId(b.ref)) return enviar(res, 400, { error: 'Datos inválidos.' });
-      if (accion !== 'ok' && texto.length < 5) return enviar(res, 400, { error: accion === 'corr' ? 'Indicá el motivo de la corrección (al menos 5 letras).' : 'Escribí la observación (al menos 5 letras).' });
+      if (accion !== 'ok' && texto.length < 5) return enviar(res, 400, { error: accion === 'anular' ? 'Indicá el motivo de la anulación (al menos 5 letras).' : accion === 'corr' ? 'Indicá el motivo de la corrección (al menos 5 letras).' : 'Escribí la observación (al menos 5 letras).' });
       const todos = ((await redis([['LRANGE', K.pq, 0, -1]]))[0] || []).map(x => JSON.parse(x));
       const paq = todos.find(x => x.t === 'paq' && x.id === b.ref);
       if (!paq) return enviar(res, 404, { error: 'El paquete no existe.' });
       const act = Object.create(null); paq.items.forEach(i => { act[i.p] = i.c; });
-      todos.filter(x => x.t === 'obs' && x.ref === paq.id).forEach(o => { if (o.p) act[o.p] = o.c; (o.cambios || []).forEach(c => { act[c.p] = c.c; }); });
+      const obsPaq = todos.filter(x => x.t === 'obs' && x.ref === paq.id);
+      if (obsPaq.some(o => o.accion === 'anular') && accion !== 'obs') return enviar(res, 400, { error: 'El paquete ya está anulado.' });
+      obsPaq.forEach(o => { if (o.p) act[o.p] = o.c; (o.cambios || []).forEach(c => { act[c.p] = c.c; }); });
       const obs = { id: b.id, t: 'obs', ref: b.ref, n: paq.n, accion, ts: ahoraAR(), quien: String(b.quien || 'Administrador').slice(0, 60), texto: texto.slice(0, 500) };
       if (accion === 'corr') {
         const pedidos = Array.isArray(b.cambios) ? b.cambios : (b.p ? [{ p: b.p, c: b.c }] : []);
