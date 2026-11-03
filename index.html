@@ -424,6 +424,7 @@ function normalizar(x) {
   x.cargas = construirCargas(x.eventos);
   if (!x.config.admin) x.config.admin = 'Administrador';
   if (!Array.isArray(x.paquetes)) x.paquetes = [];
+  x.cargas = construirCargas(x.eventos, x.paquetes);
   x.seq = x.seq || { ent: 0 }; if (!x.seq.paq) x.seq.paq = x.paquetes.reduce(function (a, q) { return Math.max(a, q.n || 0); }, 0);
   var fuera = antes.e - x.empleados.length;
   if (fuera || quitadasFull || antes.n - x.entregas.length) notas.push('Se quitó FULL: ' + fuera + ' empleados, ' + quitadasFull + ' propinas, ' + (antes.n - x.entregas.length) + ' entregas');
@@ -472,11 +473,15 @@ function filasMovimientos() {
   });
   Object.keys(D.cargas).forEach(function (k) {
     var c = D.cargas[k], m = emp(c.p);
+    if (c.paq) return; // los paquetes van abajo, con su estado
     out.push([c.cr, 'Propina', dmy(c.f), m.nombre, m.legajo, csvNum(c.an ? 0 : c.c), c.an ? 'Anulada' : c.h.length ? 'Corregida' : 'Original',
       'Cargó ' + (c.por === 'PLAYA' ? 'PLAYA' : (c.quien || 'Administrador')) + (c.h.length ? ' · ' + c.h.map(function (z) { return dmy(z[0]) + ' ' + String(z[0]).slice(11, 16) + ': ' + (z[1] == null ? '—' : $m(z[1])) + ' → ' + (z[2] == null ? 'quitada' : $m(z[2])); }).join(' | ') : '')]);
   });
   correcciones().forEach(function (x) { var e = x.ev, m = emp(e.p); out.push([e.ts, 'Corrección', dmy(e.f), m.nombre + (e.pAntes && e.pAntes !== e.p ? ' (antes ' + emp(e.pAntes).nombre + ')' : ''), m.legajo, csvNum(e.c - e.antes), 'Original ' + $m(e.antes) + ' → corregido ' + $m(e.c), (e.motivo || '') + ' · ' + (e.quien || 'Administrador')]); });
-  paqList().forEach(function (q) { q.items.forEach(function (i) { out.push([q.ts, 'Paquete N° ' + nroPaq(q.n), dmy(q.f), i.nombre, emp(i.p).legajo, csvNum(i.c), 'Armado (no es pago)', 'Turno ' + turnoNom(q.turno) + ' · preparó ' + q.quien]); }); q.obs.forEach(function (o) { out.push([o.ts, 'Obs. paquete N° ' + nroPaq(q.n), dmy(q.f), o.p ? emp(o.p).nombre : '', '', o.p ? csvNum(o.c) : '', o.p ? 'Corrección: ' + $m(o.antes || 0) + ' → ' + $m(o.c) : 'Observación', o.texto + ' · ' + o.quien]); }); });
+  paqList().forEach(function (q) { q.items.forEach(function (i) { out.push([q.ts, 'Paquete N° ' + nroPaq(q.n), dmy(q.f), i.nombre, emp(i.p).legajo, csvNum(i.c), 'Suma a caja · ' + textoEstado(estadoPaq(q)), 'Turno ' + turnoNom(q.turno) + ' · preparó ' + q.quien]); });
+    q.obs.forEach(function (o) { var cs = o.cambios || (o.p ? [{ p: o.p, antes: o.antes, c: o.c }] : []);
+      if (!cs.length) out.push([o.ts, (o.accion === 'ok' ? 'Paquete aprobado' : 'Nota paquete') + ' N° ' + nroPaq(q.n), dmy(q.f), '', '', '', o.accion === 'ok' ? 'Aprobado' : 'Observación', o.texto + ' · ' + o.quien]);
+      cs.forEach(function (x) { out.push([o.ts, 'Corrección paquete N° ' + nroPaq(q.n), dmy(q.f), emp(x.p).nombre, emp(x.p).legajo, csvNum(x.c - (x.antes || 0)), 'Original ' + $m(x.antes || 0) + ' → corregido ' + $m(x.c), o.texto + ' · ' + o.quien]); }); }); });
   D.entregas.forEach(function (en) {
     en.items.forEach(function (it) {
       var m = emp(it.p);
@@ -608,7 +613,7 @@ function pedirClave(msg, usuario) {
     var u = usuario === 'playa' ? 'playa' : 'admin';
     var ov = document.createElement('div'); ov.className = 'ov login';
     ov.innerHTML = '<div class="modal" style="max-width:430px"><div class="mbd" style="text-align:center;padding:30px 28px 10px"><div class="lgbig">BC</div><h3 style="margin:14px 0 4px">Propinas · ' + esc(D.config.empresa.nombre) + '</h3><p class="small muted" style="margin:0 0 18px">Elegí tu usuario e ingresá la contraseña</p>' +
-      '<div class="usuarios"><button data-u="playa">⛽<b>PLAYA</b><span>Cargar propinas</span></button><button data-u="admin">🔑<b>ADMINISTRADOR</b><span>Acceso total</span></button></div>' +
+      '<div class="usuarios"><button data-u="playa">⛽<b>PLAYA</b><span>Armar entrega</span></button><button data-u="admin">🔑<b>ADMINISTRADOR</b><span>Acceso total</span></button></div>' +
       '<input id="lgC" type="password" autocomplete="current-password" placeholder="Contraseña" style="width:100%;height:48px;border:1.5px solid var(--line);border-radius:12px;padding:0 14px;font-size:16px;text-align:center;margin-top:14px">' +
       '<label class="check" style="justify-content:center;margin-top:12px"><input type="checkbox" id="lgR" checked> Recordar en este dispositivo</label><div id="lgE" class="small" style="color:var(--err);min-height:20px;margin-top:8px">' + esc(msg || '') + '</div></div>' +
       '<div class="mf" style="justify-content:center;padding-bottom:24px"><button class="btn pri lg" id="lgB" style="min-width:200px">Entrar</button></div></div>';
@@ -652,7 +657,7 @@ function sincronizarEventos(j, viejas) {
   if (j.n === 0) {
     var base = unir(D.eventos || [], viejas || []);
     NUBE.n = 0; NUBE.npq = j.npq || 0; if (j.npq) D.paquetes = j.paquetes.slice();
-    if (!base.length && (j.npq || !pqLocal.length)) return;
+    if (!base.length && (j.npq || !pqLocal.length)) { recalcCargas(); return; }
     return api('POST', 'op=importar', { eventos: base, paquetes: j.npq ? [] : pqLocal }).then(function (r) {
       if (r._st !== 200) throw new Error(r.error || 'No se pudieron pasar las propinas a la nube.');
       D.eventos = base; NUBE.n = r.n; if (!j.npq) NUBE.npq = pqLocal.length; recalcCargas(); guardarAhora(true);
@@ -718,7 +723,7 @@ function iniciarSondeo() {
 }
 function revisarNube() {
   if (document.hidden || subiendo || !NUBE.rol) return;
-  if (esPlaya()) { if (ACT === 'playa' && !$$('.pl-emp input').some(function (i) { return i.value.trim(); })) refrescarPlaya(); return; }
+  if (esPlaya()) { if (!(F.pq && F.pq.items && F.pq.items.length) && !document.querySelector('.ov')) refrescarPlaya(); return; }
   api('GET', 'meta=1').then(function (m) {
     if (m._st !== 200) { if (m._st === 401) { NUBE.rol = ''; nubeLSset({ clave: '' }); pedirClave('Volvé a ingresar la contraseña.', 'admin'); } return; }
     NUBE.estado = 'ok'; NUBE.error = ''; NUBE.ultimo = ahora();
@@ -745,7 +750,7 @@ function tarjetaNube() {
   var pill = rol === 'admin' ? (st === 'offline' ? '<span class="pill warn">Sin conexión</span>' : '<span class="pill ok">Conectada · Administrador</span>') : st === 'nodisp' ? '<span class="pill">No disponible</span>' : '<span class="pill warn">Sin ingresar</span>';
   var cuerpo;
   if (st === 'nodisp') cuerpo = '<p class="small muted" style="margin:0">La nube funciona cuando abrís el sistema desde su <b>link de Vercel</b> y está configurada (base de datos y contraseñas). Abierto como archivo en la PC, todo queda solo en este navegador.</p>';
-  else if (rol === 'admin') cuerpo = '<p class="small" style="margin:0">El personal de Playa entra al mismo link con el usuario <b>PLAYA</b> y carga las propinas del día de cada empleado. Vos las ves al momento y sos el único que puede corregir.' + (NUBE.playa ? '' : ' <b style="color:var(--warn)">Falta crear la contraseña CLAVE_PLAYA en Vercel.</b>') + '</p>' +
+  else if (rol === 'admin') cuerpo = '<p class="small" style="margin:0">El personal de Playa entra al mismo link con el usuario <b>PLAYA</b> y solo arma los paquetes de efectivo (Armar entrega). Las propinas las cargás vos, y sos el único que puede corregir. Los paquetes que arman los ves al momento en Control de paquetes.' + (NUBE.playa ? '' : ' <b style="color:var(--warn)">Falta crear la contraseña CLAVE_PLAYA en Vercel.</b>') + '</p>' +
     '<div class="kv" style="grid-template-columns:repeat(4,1fr);margin-top:12px"><div><span>Última sincronización</span><b style="font-size:15px">' + (NUBE.ultimo ? dmy(NUBE.ultimo) + ' ' + NUBE.ultimo.slice(11, 16) : '—') + '</b></div><div><span>Propinas en la nube</span><b style="font-size:15px">' + D.eventos.filter(function (e) { return e.t === 'alta'; }).length + '</b></div><div><span>Versión de datos</span><b style="font-size:15px">N° ' + NUBE.rev + '</b></div><div><span>Estado</span><b style="font-size:15px">' + (st === 'offline' ? esc(NUBE.error || 'Sin conexión') : nubeLS().pend ? 'Subiendo…' : 'Al día') + '</b></div></div>' +
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px"><button class="btn" id="nSubir">Sincronizar ahora</button><button class="btn" id="nSalir">Cerrar sesión en este dispositivo</button></div>';
   else cuerpo = '<button class="btn pri" id="nEntrar">Ingresar</button>';
@@ -843,19 +848,38 @@ function suma(l, k) { return l.reduce(function (a, x) { return a + x[k]; }, 0); 
 /* ---------- operaciones */
 /* ---------- propinas como movimientos: cada carga es un registro propio y nunca se borra.
  * Las correcciones del administrador se agregan como movimientos nuevos (importe original → corregido). */
-function construirCargas(evs) {
+function construirCargas(evs, paqs) {
   var C = {};
   (evs || []).forEach(function (e) {
     if (e.t === 'alta') { C[e.id] = { k: e.id, f: e.f, s: SEC, p: e.p, c: e.c, an: !(e.c > 0), cr: e.ts || '', md: e.ts || '', por: e.por || 'ADMIN', quien: e.quien || '', h: (e.h || []).slice(), imp: !!e.imp }; return; }
     if (e.t === 'corr') { var c = C[e.ref]; if (!c) return; c.h.push([e.ts, c.c, e.c, e.quien || '', e.motivo || '', e.p !== c.p ? c.p : '']); c.c = e.c; if (e.p) c.p = e.p; c.an = !(e.c > 0); c.md = e.ts; }
   });
+  // Paquetes armados por el personal: cada empleado del paquete suma a la caja (con las correcciones del administrador)
+  var obs = {};
+  (paqs || []).forEach(function (e) { if (e.t === 'obs') (obs[e.ref] = obs[e.ref] || []).push(e); });
+  (paqs || []).forEach(function (q) {
+    if (q.t !== 'paq') return;
+    var os = obs[q.id] || [], est = estadoPaq({ obs: os });
+    q.items.forEach(function (i) {
+      var k = 'PQ|' + q.id + '|' + i.p, c = { k: k, f: q.f, s: SEC, p: i.p, c: i.c, an: !(i.c > 0), cr: q.ts, md: q.ts, por: q.por === 'PLAYA' ? 'PLAYA' : 'ADMIN', quien: q.quien, h: [], paq: q.id, paqN: q.n, estado: est };
+      os.forEach(function (o) { var nv = null; if (o.p === i.p) nv = o.c; (o.cambios || []).forEach(function (x) { if (x.p === i.p) nv = x.c; }); if (nv !== null && nv !== c.c) { c.h.push([o.ts, c.c, nv, o.quien || '', o.texto || '']); c.c = nv; c.an = !(nv > 0); c.md = o.ts; } });
+      C[k] = c;
+    });
+  });
   return C;
 }
-function recalcCargas() { D.eventos = D.eventos || []; D.cargas = construirCargas(D.eventos); REV++; }
+function recalcCargas() { D.eventos = D.eventos || []; D.paquetes = D.paquetes || []; D.cargas = construirCargas(D.eventos, D.paquetes); REV++; }
 function adminNombre() { return String(D.config.admin || '').trim() || 'Administrador'; }
 function correcciones() {
-  var orig = {};
-  return D.eventos.filter(function (e) { if (e.t === 'alta') orig[e.id] = e; return e.t === 'corr'; }).map(function (e) { return { ev: e, alta: orig[e.ref] || {} }; });
+  var orig = {}, pq = {};
+  var out = D.eventos.filter(function (e) { if (e.t === 'alta') orig[e.id] = e; return e.t === 'corr'; }).map(function (e) { return { ev: e, alta: orig[e.ref] || {} }; });
+  (D.paquetes || []).forEach(function (e) {
+    if (e.t === 'paq') { pq[e.id] = e; return; }
+    var q = pq[e.ref]; if (!q) return;
+    var cambios = e.cambios || (e.p ? [{ p: e.p, antes: e.antes, c: e.c }] : []);
+    cambios.forEach(function (x) { out.push({ ev: { ts: e.ts, p: x.p, pAntes: x.p, f: q.f, antes: x.antes || 0, c: x.c, quien: e.quien, motivo: 'Paquete N° ' + nroPaq(q.n) + ': ' + (e.texto || '') }, paq: q }); });
+  });
+  return out.sort(function (a, b) { return String(a.ev.ts) < String(b.ev.ts) ? -1 : 1; });
 }
 function errorRed(e) { return /fetch|network|Failed/i.test(e && e.message || '') ? new Error('Sin conexión: no se guardó. Revisá internet y probá de nuevo.') : e; }
 /** Registra una propina para un empleado. Con nube la guarda el servidor (que pone fecha y hora); sin nube, este navegador. */
@@ -877,6 +901,7 @@ function registrarCarga(p, c, f) {
 function registrarCorreccion(ref, c, p, motivo) {
   var cur = D.cargas[ref];
   if (!cur) return Promise.reject(new Error('La carga no existe.'));
+  if (cur.paq) return Promise.reject(new Error('Esta propina viene de un paquete: revisala desde Control de paquetes.'));
   motivo = String(motivo || '').trim();
   if (!(c >= 0) || Math.round(c) !== c) return Promise.reject(new Error('Importe inválido.'));
   if (motivo.length < 5) return Promise.reject(new Error('Indicá el motivo de la corrección (al menos 5 letras).'));
@@ -1064,7 +1089,7 @@ function menu() {
 }
 function ir(p) {
   if (sucio && sucio()) { confirmar('Cambios sin guardar', '<p>Hay importes que todavía no guardaste. ¿Salir igual?</p>', 'Salir sin guardar', 'dan s').then(function (ok) { if (ok) { sucio = null; ir(p); } }); return; }
-  if (esPlaya()) { if (p !== 'paquete') p = 'playa'; }
+  if (esPlaya()) p = 'paquete'; // PLAYA solo arma paquetes
   else if (p === 'playa') p = 'inicio';
   sucio = null; ACT = p; menu(); $('#acts').innerHTML = '';
   var v = $('#view'); v.style.animation = 'none'; void v.offsetWidth; v.style.animation = '';
@@ -1093,6 +1118,8 @@ function pInicio() {
   var ing = x.inicial + x.propinas, activos = empleadosDe(SEC).length;
   var h = bannerCarpeta();
   if (soloLectura()) h += '<div class="banner info">👁️ <div>Vista de <b>solo lectura</b>: ves lo que carga el administrador. Se actualiza sola cada minuto.</div></div>';
+  var pend = paqPendientes();
+  if (pend.length) h += '<div class="banner warn">📦 <div><b>' + pend.length + ' paquete' + (pend.length === 1 ? '' : 's') + ' pendiente' + (pend.length === 1 ? '' : 's') + ' de revisar</b> (' + $m(pend.reduce(function (a, q) { return a + totalEfectivo(q); }, 0)) + ', ya sumado a la caja). <button class="btn sm" id="bPend" style="margin-left:8px">Revisar</button></div></div>';
   if (!soloLectura() && !x.inicial && !D.entregas.length) h += '<div class="banner info">💰 <div>¿Ya tenés plata de propinas en la caja? <a href="#" id="bIni" style="font-weight:700;color:inherit">Cargá el saldo inicial</a> para que se sume a lo que se reparte.</div></div>';
   h += '<div class="grid g3 stagger">';
   h += '<div class="card hero"><div class="l">En caja para repartir</div><div class="v" data-cnt="' + x.caja + '">$ 0</div><div class="row"><div><span>Saldo inicial</span><b>' + $m(x.inicial) + '</b></div><div><span>Propinas cargadas</span><b>' + $m(x.propinas) + '</b></div><div><span>Ya entregado</span><b>' + $m(x.entregado) + '</b></div></div></div>';
@@ -1114,6 +1141,7 @@ function pInicio() {
   $('#view').innerHTML = h;
   engancharCarpeta($('#view'));
   if ($('#bIni')) $('#bIni').onclick = function (ev) { ev.preventDefault(); ir('caja'); };
+  if ($('#bPend')) $('#bPend').onclick = function () { F.pqs = Object.assign(F.pqs || {}, { tab: 'lista', pend: true }); ir('paquetes'); };
   $$('[data-dia]').forEach(function (s) { s.onclick = function () { if (soloLectura()) { F.rep = Object.assign(F.rep || {}, { tipo: 'diario', f: s.dataset.dia }); ir('reportes'); return; } F.cg = { f: s.dataset.dia }; ir('cargar'); }; });
   $$('[data-en]').forEach(function (li) { li.onclick = function () { verReporte(reporteEntrega(D.entregas.find(function (x) { return x.id === li.dataset.en; }))); }; });
   $$('[data-go]').forEach(function (b) { b.onclick = function () { ir(b.dataset.go); }; });
@@ -1124,7 +1152,7 @@ function pInicio() {
 var PL = null; // datos del usuario PLAYA (los arma el servidor: empleados, día de hoy y acumulados)
 function refrescarPlaya() {
   return api('GET').then(function (j) {
-    if (j._st === 200) { PL = j; NUBE.ultimo = ahora(); NUBE.estado = 'ok'; if (ACT === 'playa' && !document.querySelector('.ov')) refrescar(); return true; }
+    if (j._st === 200) { PL = j; NUBE.ultimo = ahora(); NUBE.estado = 'ok'; if ((ACT === 'playa' || ACT === 'paquete') && !document.querySelector('.ov')) refrescar(); return true; }
     if (j._st === 401) { NUBE.rol = ''; nubeLSset({ clave: '' }); pedirClave('Volvé a ingresar la contraseña.', 'playa'); }
     return false;
   }, function () { toast('Sin conexión. Revisá internet.', 'err'); return false; });
@@ -1151,7 +1179,7 @@ function datosCarga(f) {
   return { f: f, empresa: D.config.empresa.nombre,
     empleados: emps.map(function (m) { return Object.assign({}, m, { hoy: dia[m.id] || 0, acum: tot[m.id] || 0 }); }).sort(porNombre),
     totalDia: sum(dia), acumGeneral: sum(tot),
-    cargas: lista.map(function (c) { var o = c.h.length ? c.h[0][1] : c.c; return { k: c.k, p: c.p, c: c.an ? 0 : c.c, orig: o == null ? c.c : o, ts: c.cr, por: c.por, quien: c.quien, nombre: emp(c.p).nombre, corr: c.h.length, an: c.an }; }) };
+    cargas: lista.map(function (c) { var o = c.h.length ? c.h[0][1] : c.c; return { paq: c.paq, paqN: c.paqN, estado: c.estado, k: c.k, p: c.p, c: c.an ? 0 : c.c, orig: o == null ? c.c : o, ts: c.cr, por: c.por, quien: c.quien, nombre: emp(c.p).nombre, corr: c.h.length, an: c.an }; }) };
 }
 function pCargar() {
   var admin = !esPlaya(), c = F.cg = F.cg || {};
@@ -1172,13 +1200,13 @@ function pCargar() {
     return '<div class="pl-emp' + (c.flash === m.id ? ' flash' : '') + '" data-p="' + esc(m.id) + '" data-n="' + esc(m.nombre.toLowerCase()) + '">' + persona(m) +
       '<div class="pl-num"><span>' + (admin && c.f !== hoy() ? 'Ese día' : 'Hoy') + '</span><b>' + $m(m.hoy) + '</b></div><div class="pl-num"><span>Acumulado</span><b>' + $m(m.acum) + '</b></div>' +
       '<input inputmode="decimal" autocomplete="off" placeholder="Importe"><button class="btn pri" data-reg>Registrar</button></div>';
-  }).join('') + '</div>' : '<div class="card"><div class="empty"><div class="ic">👥</div><b>No hay empleados de Playa habilitados</b>' + (admin ? 'Agregalos en Empleados.' : 'Pedile al administrador que los habilite.') + '</div></div>';
+  }).join('') + '</div>' : '<div class="card"><div class="empty"><div class="ic">👥</div><b>No hay empleados de Playa habilitados</b>' + (admin ? 'Agregalos en Empleados.' : 'El administrador tiene que entrar una vez con su usuario para publicar la lista.') + '</div></div>';
   h += '<div class="card mt"><div class="hd"><h3>Cargas ' + (admin && c.f !== hoy() ? 'del ' + dmy(c.f) : 'de hoy') + '</h3><span class="r">' + (admin ? '<button class="btn sm" id="plComp">🧾 Comprobante del día</button>' : '') + '</span></div><div class="bd p0 tw maxh"><table class="t"><thead><tr><th>Hora</th><th>Empleado</th><th class="num">Importe</th><th>Cargó</th><th>Estado</th>' + (admin ? '<th></th>' : '') + '</tr></thead><tbody>' +
     (d.cargas.length ? d.cargas.map(function (x) {
       var cambio = x.c !== x.orig || (x.pOrig && x.pOrig !== x.p) || x.corr;
       return '<tr><td>' + esc((x.ts || '').slice(11, 16)) + '</td><td>' + esc(x.nombre) + '</td><td class="num b">' + (x.c > 0 ? $m(x.c) : '<s class="muted">' + $m(x.orig) + '</s>') + '</td><td class="small">' + (x.por === 'PLAYA' ? 'PLAYA' : esc(x.quien || 'Administrador')) + '</td>' +
-        '<td>' + (x.c === 0 && cambio ? '<span class="pill err">Anulada por administración</span>' : cambio ? '<span class="pill warn">Corregida (antes ' + $m(x.orig) + ')</span>' : '<span class="pill ok">Registrada</span>') + '</td>' +
-        (admin ? '<td style="text-align:right"><button class="btn sm" data-corr="' + esc(x.k) + '">Corregir</button></td>' : '') + '</tr>';
+        '<td>' + (x.paq ? '<span class="pill">📦 N° ' + nroPaq(x.paqN) + '</span> ' + pillEstado(x.estado) : x.c === 0 && cambio ? '<span class="pill err">Anulada por administración</span>' : cambio ? '<span class="pill warn">Corregida (antes ' + $m(x.orig) + ')</span>' : '<span class="pill ok">Registrada</span>') + '</td>' +
+        (admin ? '<td style="text-align:right">' + (x.paq ? '<button class="btn sm" data-revpaq="' + esc(x.paq) + '">Revisar</button>' : '<button class="btn sm" data-corr="' + esc(x.k) + '">Corregir</button>') + '</td>' : '') + '</tr>';
     }).join('') : '<tr><td colspan="6"><div class="empty"><div class="ic">📭</div><b>Todavía no hay cargas ' + (admin && c.f !== hoy() ? 'ese día' : 'hoy') + '</b></div></td></tr>') +
     '</tbody><tfoot><tr><td colspan="2">' + d.cargas.length + ' cargas</td><td class="num">' + $m(d.totalDia) + '</td><td colspan="3"></td></tr></tfoot></table></div></div>';
   $('#view').innerHTML = h;
@@ -1216,6 +1244,7 @@ function pCargar() {
     $('#fp').onclick = function () { c.f = addD(c.f, 1); refrescar(); };
     if ($('#fh')) $('#fh').onclick = function () { c.f = hoy(); refrescar(); };
     $$('[data-corr]').forEach(function (bt) { bt.onclick = function () { corregirCarga(bt.dataset.corr); }; });
+    $$('[data-revpaq]').forEach(function (bt) { bt.onclick = function () { detallePaquete(bt.dataset.revpaq); }; });
     $('#plComp').onclick = function () { comprobanteDia(c.f); };
   } else engancharTabsPlaya();
   if (!c.q && !('ontouchstart' in window)) setTimeout(function () { if (!document.querySelector('.ov')) q.focus(); }, 50);
@@ -1294,8 +1323,15 @@ function paqList() {
   return fuente.filter(function (e) { return e.t === 'paq'; }).map(function (q) { return Object.assign({}, q, { obs: obs[q.id] || [] }); }).sort(function (a, b) { return b.n - a.n; });
 }
 /** Importe por empleado según el paquete, aplicando las correcciones auditadas del administrador. */
-function efectivoPaq(q) { var m = {}; q.items.forEach(function (i) { m[i.p] = i.c; }); q.obs.forEach(function (o) { if (o.p) m[o.p] = o.c; }); return m; }
-function declaradoDia(f) { var r = {}; Object.keys(D.cargas).forEach(function (k) { var c = D.cargas[k]; if (!c.an && c.f === f) r[c.p] = (r[c.p] || 0) + c.c; }); return r; }
+function efectivoPaq(q) { var m = {}; q.items.forEach(function (i) { m[i.p] = i.c; }); q.obs.forEach(function (o) { if (o.p) m[o.p] = o.c; (o.cambios || []).forEach(function (x) { m[x.p] = x.c; }); }); return m; }
+function totalEfectivo(q) { var e = efectivoPaq(q); return Object.keys(e).reduce(function (a, p) { return a + e[p]; }, 0); }
+/** pend = pendiente de revisar · ok = aprobado · corr = corregido por el administrador */
+function estadoPaq(q) { var est = 'pend'; (q.obs || []).forEach(function (o) { if (o.accion === 'ok') est = 'ok'; else if (o.accion === 'corr' || o.p || (o.cambios && o.cambios.length)) est = 'corr'; }); return est; }
+function pillEstado(e) { return e === 'ok' ? '<span class="pill ok">✓ Aprobado</span>' : e === 'corr' ? '<span class="pill warn">✏️ Corregido</span>' : '<span class="pill err">⏳ Pendiente de revisar</span>'; }
+function textoEstado(e) { return e === 'ok' ? 'Aprobado' : e === 'corr' ? 'Corregido' : 'Pendiente de revisar'; }
+function paqPendientes() { return paqList().filter(function (q) { return estadoPaq(q) === 'pend'; }); }
+/** Lo cargado a mano por el administrador en "Cargar propinas" (sin contar los paquetes). */
+function declaradoDia(f) { var r = {}; Object.keys(D.cargas).forEach(function (k) { var c = D.cargas[k]; if (!c.an && !c.paq && c.f === f) r[c.p] = (r[c.p] || 0) + c.c; }); return r; }
 function controlDia(f, lista) {
   var dec = declaradoDia(f), paq = {};
   (lista || paqList()).filter(function (q) { return q.f === f; }).forEach(function (q) { var e = efectivoPaq(q); Object.keys(e).forEach(function (p) { paq[p] = (paq[p] || 0) + e[p]; }); });
@@ -1317,24 +1353,33 @@ function registrarPaquete(o) {
   }
   D.seq.paq = (D.seq.paq || 0) + 1;
   var q = Object.assign(b, { t: 'paq', n: D.seq.paq, ts: ahora(), total: suma(b.items, 'c'), por: 'ADMIN' });
-  D.paquetes.push(q); bitacora('PAQUETE', 'N° ' + nroPaq(q.n) + ' · ' + dmy(q.f) + ' · ' + turnoNom(q.turno) + ' · ' + q.items.length + ' empleados · ' + $m(q.total)); guardar();
+  D.paquetes.push(q); recalcCargas(); bitacora('PAQUETE', 'N° ' + nroPaq(q.n) + ' · ' + dmy(q.f) + ' · ' + turnoNom(q.turno) + ' · ' + q.items.length + ' empleados · ' + $m(q.total)); guardar();
   return Promise.resolve(q);
 }
-function registrarObsPaquete(ref, texto, p, c) {
+/** Revisión del administrador: accion 'ok' (está bien), 'corr' (cambia importes y mueve la caja) u 'obs' (solo nota). */
+function registrarObsPaquete(ref, accion, texto, cambios) {
   texto = String(texto || '').trim();
-  if (texto.length < 5) return Promise.reject(new Error('Escribí la observación (al menos 5 letras).'));
+  if (accion === 'ok' && !texto) texto = 'Revisado: está OK';
+  if (texto.length < 5) return Promise.reject(new Error(accion === 'corr' ? 'Indicá el motivo de la corrección (al menos 5 letras).' : 'Escribí la observación (al menos 5 letras).'));
   var q = paqList().find(function (x) { return x.id === ref; }); if (!q) return Promise.reject(new Error('El paquete no existe.'));
-  var b = { id: uid('O'), ref: ref, texto: texto, quien: adminNombre() };
-  if (p) { if (!(c >= 0) || Math.round(c) !== c) return Promise.reject(new Error('Importe inválido.')); b.p = p; b.c = c; }
-  var fin = function () { bitacora('OBS. PAQUETE', 'N° ' + nroPaq(q.n) + (p ? ' · ' + emp(p).nombre + ': ' + $m(efectivoPaq(q)[p] || 0) + ' → ' + $m(c) : '') + ' · ' + texto + ' · ' + adminNombre()); guardar(); };
+  var act = efectivoPaq(q), lista = [];
+  if (accion === 'corr') {
+    (cambios || []).forEach(function (x) { if (x.c !== act[x.p]) lista.push({ p: x.p, antes: act[x.p], c: x.c }); });
+    if (!lista.length) return Promise.reject(new Error('No cambiaste ningún importe.'));
+    if (lista.some(function (x) { return !(x.c >= 0) || Math.round(x.c) !== x.c; })) return Promise.reject(new Error('Hay un importe inválido.'));
+  }
+  var b = { id: uid('O'), ref: ref, accion: accion, texto: texto, quien: adminNombre() };
+  if (lista.length) b.cambios = lista;
+  var dif = lista.reduce(function (a, x) { return a + x.c - x.antes; }, 0);
+  var fin = function () { bitacora(accion === 'ok' ? 'PAQUETE APROBADO' : accion === 'corr' ? 'PAQUETE CORREGIDO' : 'OBS. PAQUETE', 'N° ' + nroPaq(q.n) + (lista.length ? ' · ' + lista.map(function (x) { return emp(x.p).nombre + ': ' + $m(x.antes) + ' → ' + $m(x.c); }).join(', ') + ' · caja ' + (dif >= 0 ? '+' : '') + $m(dif) : '') + ' · ' + texto + ' · ' + adminNombre()); guardar(); };
   if (enNube()) {
     return api('POST', 'op=paqobs', b).then(function (j) {
       if (j._st !== 200) throw new Error(j.error || 'No se pudo guardar (error ' + j._st + ').');
       return traerEventos().then(function () { fin(); return j.obs; });
     }).catch(function (e) { throw errorRed(e); });
   }
-  var o = Object.assign(b, { t: 'obs', n: q.n, ts: ahora() }); if (p) o.antes = (q.items.find(function (i) { return i.p === p; }) || {}).c;
-  D.paquetes.push(o); fin();
+  var o = Object.assign(b, { t: 'obs', n: q.n, ts: ahora() });
+  D.paquetes.push(o); recalcCargas(); fin();
   return Promise.resolve(o);
 }
 
@@ -1369,7 +1414,7 @@ function imprimirTicket(html) {
   var d = fr.contentWindow.document; d.open(); d.write(html); d.close();
   setTimeout(function () { try { if (!window.__sinImprimir) { fr.contentWindow.focus(); fr.contentWindow.print(); } } catch (e) { toast('No se pudo abrir la impresión: ' + e.message, 'err'); } setTimeout(function () { fr.remove(); }, 60000); }, 300);
 }
-function tabsPlaya(act) { return esPlaya() ? '<div class="tabs"><a data-pt="playa" class="' + (act === 'playa' ? 'on' : '') + '">✍️ Cargar propinas</a><a data-pt="paquete" class="' + (act === 'paquete' ? 'on' : '') + '">📦 Armar entrega</a></div>' : ''; }
+function tabsPlaya(act) { return false ? '<div class="tabs"><a data-pt="playa" class="' + (act === 'playa' ? 'on' : '') + '">✍️ Cargar propinas</a><a data-pt="paquete" class="' + (act === 'paquete' ? 'on' : '') + '">📦 Armar entrega</a></div>' : ''; }
 function engancharTabsPlaya() {
   $$('[data-pt]').forEach(function (a) { a.onclick = function () { ir(a.dataset.pt); }; });
   if ($('#plAct')) $('#plAct').onclick = function () { refrescarPlaya().then(function (ok) { if (ok) toast('Actualizado.', 'ok'); }); };
@@ -1381,15 +1426,15 @@ function pPaquete() {
   var hoyR = esPlaya() && PL ? PL.hoy : hoy();
   var st = F.pq = F.pq || {}; st.f = st.f || hoyR; st.turno = st.turno || turnoActual(); st.items = st.items || [];
   if (st.f > hoyR) st.f = hoyR;
-  cab('📦 Armar entrega', 'Preparar paquete de propinas · ' + (esPlaya() && PL ? PL.empresa : D.config.empresa.nombre) + ' · Playa', esPlaya() ? botonesPlaya() : '<button class="btn" data-go="paquetes">Control de paquetes</button>');
+  cab('📦 Armar entrega', 'Preparar paquete de propinas · ' + ((esPlaya() && PL && PL.empresa) || D.config.empresa.nombre) + ' · Playa', esPlaya() ? botonesPlaya() : '<button class="btn" data-go="paquetes">Control de paquetes</button>');
   var emps = empleadosPaquete(), enPaq = {}; st.items.forEach(function (i) { enPaq[i.p] = 1; });
   var sT = segmento('qT', TURNOS, st.turno, function (v) { st.turno = v; }, 'big');
-  var h = tabsPlaya('paquete') + '<div class="banner warn">📦 <div><b>Armar un paquete no es pagar.</b> Registra el dinero que contaron y pusieron en el paquete. No cambia lo declarado ni los acumulados, y no marca nada como pagado.</div></div>' +
+  var h = tabsPlaya('paquete') + '<div class="banner info">📦 <div>Contá el dinero, agregá a cada empleado con lo que le corresponde y confirmá. <b>El paquete suma a la caja de propinas</b> y queda <b>pendiente de revisión</b> del administrador. No es un pago.</div></div>' +
     '<div class="bar"><div class="f"><label>Fecha</label><input type="date" id="qF" value="' + st.f + '" max="' + hoyR + '"' + (esPlaya() ? ' min="' + addD(hoyR, -3) + '"' : '') + '></div><div class="f"><label>Turno</label>' + sT.html + '</div>' +
     '<div class="f"><label>Papel</label><select id="qPapel">' + opts([['80', '80 mm'], ['58', '58 mm']], papel()) + '</select></div></div>' +
     '<div class="grid g21 stagger"><div class="card"><div class="hd"><h3>1 · Empleados incluidos</h3><span class="r"><button class="btn sm" id="qTodos">Agregar todos</button></span></div><div class="bd">' +
     '<input id="qQ" placeholder="Buscar empleado…" autocomplete="off" style="width:100%;height:42px;border:1.5px solid var(--line);border-radius:11px;padding:0 12px;margin-bottom:12px">' +
-    '<div class="qchips">' + (emps.length ? emps.map(function (m) { return '<button class="qchip' + (enPaq[m.id] ? ' on' : '') + '" data-add="' + esc(m.id) + '" data-n="' + esc(m.nombre.toLowerCase()) + '">' + (enPaq[m.id] ? '✓ ' : '+ ') + esc(m.nombre) + '</button>'; }).join('') : '<div class="small muted">No hay empleados habilitados.</div>') + '</div></div></div>' +
+    '<div class="qchips">' + (emps.length ? emps.map(function (m) { return '<button class="qchip' + (enPaq[m.id] ? ' on' : '') + '" data-add="' + esc(m.id) + '" data-n="' + esc(m.nombre.toLowerCase()) + '">' + (enPaq[m.id] ? '✓ ' : '+ ') + esc(m.nombre) + '</button>'; }).join('') : '<div class="small muted">' + (esPlaya() ? 'Todavía no hay empleados publicados: el administrador tiene que entrar una vez con su usuario.' : 'No hay empleados habilitados.') + '</div>') + '</div></div></div>' +
     '<div class="card"><div class="hd"><h3>2 · Dinero contado de cada uno</h3><span class="r"><button class="btn sm ghost" id="qVaciar">Vaciar</button></span></div><div class="bd p0">' +
     (st.items.length ? '<table class="t"><tbody>' + st.items.map(function (i) { return '<tr data-q="' + esc(i.p) + '"><td>' + esc(nombreDe(i.p)) + '</td><td class="num" style="width:150px"><input class="amt" data-v inputmode="decimal" placeholder="$ 0" value="' + esc(i.v || '') + '"></td><td style="width:44px"><button class="btn sm ghost" data-quitar title="Quitar">✕</button></td></tr>'; }).join('') + '</tbody></table>'
       : '<div class="empty"><div class="ic">👆</div><b>Agregá los empleados del paquete</b>Tocá sus nombres a la izquierda.</div>') +
@@ -1434,7 +1479,7 @@ function pPaquete() {
     var tot = suma(items, 'c');
     var html = '<div class="kv" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px"><div><span>Fecha</span><b style="font-size:15px">' + dmy(st.f) + '</b></div><div><span>Turno</span><b style="font-size:15px">' + turnoNom(st.turno) + '</b></div><div><span>Total del paquete</span><b style="font-size:18px">' + $m(tot) + '</b></div></div>' +
       '<table class="t"><tbody>' + items.map(function (i) { return '<tr><td>' + esc(nombreDe(i.p)) + '</td><td class="num b">' + $m(i.c) + '</td></tr>'; }).join('') + '</tbody></table>' +
-      '<p class="small muted" style="margin-bottom:0">Al confirmar se guarda el paquete y se imprime el comprobante para abrochar. No es un pago.</p>';
+      '<p class="small muted" style="margin-bottom:0">Al confirmar se guarda el paquete, <b>suma a la caja</b>, queda pendiente de revisión y se imprime el comprobante para abrochar.</p>';
     modal('¿Confirmás el paquete?', html, [{ t: 'Volver' }, { t: '🖨️ Confirmar e imprimir', c: 'pri', fn: function () {
       $('#qOk').disabled = true;
       registrarPaquete({ f: st.f, turno: st.turno, items: items }).then(function (q) {
@@ -1451,32 +1496,34 @@ function pPaquete() {
 /* ---------- control de paquetes (solo administrador) */
 function pPaquetes() {
   var f = F.pqs = F.pqs || { tab: 'lista' };
+  if (f.pend && !paqPendientes().length) f.pend = false;
   if (f.d === undefined) { var r = rango('mes'); f.d = r[0]; f.h = r[1]; }
-  cab('Control de paquetes', 'Lo contado en los paquetes comparado con lo declarado', '<button class="btn" id="qCsv">Exportar a Excel</button><button class="btn pri" data-go="paquete">📦 Armar entrega</button>');
-  var tabs = '<div class="tabs">' + [['lista', 'Paquetes'], ['control', 'Declarado vs. paquetes']].map(function (t) { return '<a data-tab="' + t[0] + '" class="' + (f.tab === t[0] ? 'on' : '') + '">' + t[1] + '</a>'; }).join('') + '</div>';
+  cab('Control de paquetes', 'Revisá los paquetes que armó el personal: si está OK lo aprobás, si no, lo corregís', '<button class="btn" id="qCsv">Exportar a Excel</button><button class="btn pri" data-go="paquete">📦 Armar entrega</button>');
+  var tabs = '<div class="tabs">' + [['lista', 'Paquetes'], ['control', 'Cargado a mano vs. paquetes']].map(function (t) { return '<a data-tab="' + t[0] + '" class="' + (f.tab === t[0] ? 'on' : '') + '">' + t[1] + '</a>'; }).join('') + '</div>';
   var cp = chipsPeriodo(f, refrescar, true);
-  $('#view').innerHTML = tabs + '<div class="banner info">📦 <div>Los paquetes son el <b>dinero contado y armado</b> por el personal. No son pagos y no cambian lo declarado. Si hay un error, agregá una observación o corrección: el comprobante original se conserva.</div></div>' +
-    '<div class="bar">' + cp.html + '<div class="f grow"><label>Buscar</label><input id="qB" value="' + esc(f.q || '') + '" placeholder="Empleado o N° de paquete"></div>' + (f.tab === 'control' ? '<label class="check"><input type="checkbox" id="qSD"' + (f.soloDif ? ' checked' : '') + '> Solo con diferencias</label>' : '') + '</div><div id="qBody"></div>';
+  $('#view').innerHTML = tabs + '<div class="banner info">📦 <div>Cada paquete <b>suma a la caja</b> apenas lo arman y queda <b>pendiente de revisar</b>. Si está bien, tocá <b>Está OK</b>; si no, <b>Corregir</b>: la caja se mueve por la diferencia y el ticket original se conserva.</div></div>' +
+    '<div class="bar">' + cp.html + '<div class="f grow"><label>Buscar</label><input id="qB" value="' + esc(f.q || '') + '" placeholder="Empleado o N° de paquete"></div>' + (f.tab === 'control' ? '<label class="check"><input type="checkbox" id="qSD"' + (f.soloDif ? ' checked' : '') + '> Solo con diferencias</label>' : '<label class="check"><input type="checkbox" id="qPen"' + (f.pend ? ' checked' : '') + '> Solo pendientes (' + paqPendientes().length + ')</label>') + '</div><div id="qBody"></div>';
   cp.enganchar();
   $$('[data-tab]').forEach(function (a) { a.onclick = function () { f.tab = a.dataset.tab; refrescar(); }; });
   $$('[data-go]').forEach(function (b) { b.onclick = function () { ir(b.dataset.go); }; });
   $('#qB').oninput = function () { f.q = this.value; cuerpo(); };
   if ($('#qSD')) $('#qSD').onchange = function () { f.soloDif = this.checked; cuerpo(); };
+  if ($('#qPen')) $('#qPen').onchange = function () { f.pend = this.checked; cuerpo(); };
   var todos = paqList(), filasCsv = [];
   function cuerpo() {
     var q = String(f.q || '').toLowerCase().trim(), box = $('#qBody');
-    var lista = todos.filter(function (x) { return enRango(x.f, f.d, f.h) && (!q || nroPaq(x.n).indexOf(q) >= 0 || String(x.n) === q || x.items.some(function (i) { return emp(i.p).nombre.toLowerCase().indexOf(q) >= 0; })); });
+    var lista = todos.filter(function (x) { return (f.tab !== 'lista' || !f.pend || estadoPaq(x) === 'pend') && (f.pend && f.tab === 'lista' || enRango(x.f, f.d, f.h)) && (!q || nroPaq(x.n).indexOf(q) >= 0 || String(x.n) === q || x.items.some(function (i) { return emp(i.p).nombre.toLowerCase().indexOf(q) >= 0; })); });
     if (f.tab === 'lista') {
       var difDia = {};
       lista.forEach(function (x) { if (difDia[x.f] === undefined) difDia[x.f] = controlDia(x.f, todos).filas.some(function (r) { return r.dif !== 0; }); });
-      filasCsv = [['N° paquete', 'Fecha', 'Turno', 'Preparado (fecha y hora)', 'Preparó', 'Empleado', 'Importe en paquete', 'Importe corregido', 'Total paquete', 'Observaciones']];
-      lista.forEach(function (x) { var e = efectivoPaq(x); x.items.forEach(function (i) { filasCsv.push([nroPaq(x.n), dmy(x.f), turnoNom(x.turno), dmy(x.ts) + ' ' + String(x.ts).slice(11, 16), x.quien, i.nombre, csvNum(i.c), e[i.p] !== i.c ? csvNum(e[i.p]) : '', csvNum(x.total), x.obs.map(function (o) { return o.texto; }).join(' | ')]); }); });
-      box.innerHTML = '<div class="card"><div class="bd p0 tw maxh"><table class="t"><thead><tr><th>N°</th><th>Fecha</th><th>Turno</th><th>Preparado</th><th>Empleados</th><th class="num">Total</th><th>Control del día</th><th></th></tr></thead><tbody class="stagger">' +
+      filasCsv = [['N° paquete', 'Fecha', 'Turno', 'Preparado (fecha y hora)', 'Preparó', 'Estado', 'Empleado', 'Importe en el ticket', 'Importe corregido', 'Total que suma a caja', 'Revisiones']];
+      lista.forEach(function (x) { var e = efectivoPaq(x); x.items.forEach(function (i) { filasCsv.push([nroPaq(x.n), dmy(x.f), turnoNom(x.turno), dmy(x.ts) + ' ' + String(x.ts).slice(11, 16), x.quien, textoEstado(estadoPaq(x)), i.nombre, csvNum(i.c), e[i.p] !== i.c ? csvNum(e[i.p]) : '', csvNum(totalEfectivo(x)), x.obs.map(function (o) { return o.texto; }).join(' | ')]); }); });
+      box.innerHTML = '<div class="card"><div class="bd p0 tw maxh"><table class="t"><thead><tr><th>N°</th><th>Fecha</th><th>Turno</th><th>Preparado</th><th>Empleados</th><th class="num">Suma a caja</th><th>Estado</th><th></th></tr></thead><tbody class="stagger">' +
         (lista.length ? lista.map(function (x) {
-          return '<tr class="click" data-paq="' + esc(x.id) + '"><td class="b">' + nroPaq(x.n) + '</td><td>' + dmy(x.f) + '</td><td>' + turnoNom(x.turno) + '</td><td class="small">' + dmy(x.ts) + ' ' + String(x.ts).slice(11, 16) + '<div class="tiny muted">' + esc(x.quien) + '</div></td><td class="small">' + x.items.length + '</td><td class="num b">' + $m(x.total) + '</td>' +
-            '<td>' + (difDia[x.f] ? '<span class="pill warn">Hay diferencia</span>' : '<span class="pill ok">Coincide</span>') + (x.obs.length ? ' <span class="pill">' + x.obs.length + ' obs.</span>' : '') + '</td><td style="text-align:right"><button class="btn sm" data-reimp="' + esc(x.id) + '">🖨️</button></td></tr>';
+          return '<tr class="click" data-paq="' + esc(x.id) + '"><td class="b">' + nroPaq(x.n) + '</td><td>' + dmy(x.f) + '</td><td>' + turnoNom(x.turno) + '</td><td class="small">' + dmy(x.ts) + ' ' + String(x.ts).slice(11, 16) + '<div class="tiny muted">' + esc(x.quien) + '</div></td><td class="small">' + x.items.length + '</td><td class="num b">' + $m(totalEfectivo(x)) + (totalEfectivo(x) !== x.total ? '<div class="tiny muted">ticket ' + $m(x.total) + '</div>' : '') + '</td>' +
+            '<td>' + pillEstado(estadoPaq(x)) + '</td><td style="text-align:right"><button class="btn sm" data-reimp="' + esc(x.id) + '">🖨️</button></td></tr>';
         }).join('') : '<tr><td colspan="8"><div class="empty"><div class="ic">📦</div><b>Sin paquetes en el período</b></div></td></tr>') +
-        '</tbody><tfoot><tr><td colspan="5">' + lista.length + ' paquetes</td><td class="num">' + $m(suma(lista, 'total')) + '</td><td colspan="2"></td></tr></tfoot></table></div></div>';
+        '</tbody><tfoot><tr><td colspan="5">' + lista.length + ' paquetes</td><td class="num">' + $m(lista.reduce(function (a, x) { return a + totalEfectivo(x); }, 0)) + '</td><td colspan="2"></td></tr></tfoot></table></div></div>';
       $$('[data-paq]').forEach(function (tr) { tr.onclick = function (ev) { if (ev.target.closest('[data-reimp]')) return; detallePaquete(tr.dataset.paq); }; });
     } else {
       var dias = {};
@@ -1499,26 +1546,47 @@ function pPaquetes() {
 }
 function detallePaquete(id) {
   var todos = paqList(), q = todos.find(function (x) { return x.id === id; }); if (!q) return;
-  var ctl = controlDia(q.f, todos), e = efectivoPaq(q), porP = {}; ctl.filas.forEach(function (r) { porP[r.p] = r; });
-  var html = '<div class="kv" style="grid-template-columns:repeat(4,1fr)"><div><span>Fecha</span><b style="font-size:15px">' + dmy(q.f) + '</b></div><div><span>Turno</span><b style="font-size:15px">' + turnoNom(q.turno) + '</b></div><div><span>Preparado</span><b style="font-size:15px">' + String(q.ts).slice(11, 16) + '</b><div class="tiny muted">' + esc(q.quien) + '</div></div><div><span>Total</span><b style="font-size:18px">' + $m(q.total) + '</b></div></div>' +
-    '<h4 style="margin:18px 0 6px">Contado vs. declarado</h4><table class="t"><thead><tr><th>Empleado</th><th class="num">En este paquete</th><th class="num">En paquetes del día</th><th class="num">Declarado del día</th><th class="num">Diferencia</th></tr></thead><tbody>' +
-    q.items.map(function (i) { var r = porP[i.p] || { dec: 0, paq: 0, dif: 0 }, cor = e[i.p] !== i.c; return '<tr><td>' + esc(i.nombre) + '</td><td class="num b">' + $m(i.c) + (cor ? '<div class="tiny" style="color:#b45309">corregido: ' + $m(e[i.p]) + '</div>' : '') + '</td><td class="num">' + $m(r.paq) + '</td><td class="num">' + $m(r.dec) + '</td><td class="num">' + (r.dif === 0 ? '<span class="pill ok">0</span>' : '<b style="color:' + (r.dif < 0 ? 'var(--err)' : '#b45309') + '">' + (r.dif > 0 ? '+' : '') + $m(r.dif) + '</b>') + '</td></tr>'; }).join('') +
-    '</tbody></table><div class="tiny muted mt">“Declarado del día” es lo que cargaron en el sistema ese día. Si hay varios paquetes en el mismo día, se comparan todos juntos.</div>' +
-    '<h4 style="margin:18px 0 6px">Observaciones y correcciones</h4>' + (q.obs.length ? q.obs.map(function (o) { return '<div class="small" style="padding:6px 0;border-bottom:1px solid var(--line2)"><b>' + dmy(o.ts) + ' ' + String(o.ts).slice(11, 16) + '</b> · ' + esc(o.quien) + (o.p ? ' · <span class="pill warn">' + esc(emp(o.p).nombre) + ': ' + $m(o.antes != null ? o.antes : 0) + ' → ' + $m(o.c) + '</span>' : '') + '<div>' + esc(o.texto) + '</div></div>'; }).join('') : '<div class="small muted">Sin observaciones.</div>');
-  var d = drawer('<div><div class="tiny muted">Paquete</div><b style="font-size:20px">N° ' + nroPaq(q.n) + '</b></div>', html, '<button class="btn" id="dqObs">Agregar observación / corrección</button><button class="btn pri" id="dqRe">🖨️ Reimprimir</button>');
+  var e = efectivoPaq(q), est = estadoPaq(q), man = declaradoDia(q.f), hayMan = Object.keys(man).length > 0, tot = totalEfectivo(q);
+  var html = '<div class="kv" style="grid-template-columns:repeat(4,1fr)"><div><span>Fecha</span><b style="font-size:15px">' + dmy(q.f) + '</b></div><div><span>Turno</span><b style="font-size:15px">' + turnoNom(q.turno) + '</b></div><div><span>Preparado</span><b style="font-size:15px">' + String(q.ts).slice(11, 16) + '</b><div class="tiny muted">' + esc(q.quien) + '</div></div><div><span>Suma a la caja</span><b style="font-size:18px">' + $m(tot) + '</b>' + (tot !== q.total ? '<div class="tiny muted">en el ticket: ' + $m(q.total) + '</div>' : '') + '</div></div>' +
+    '<div style="margin:14px 0 4px">' + pillEstado(est) + '</div>' +
+    '<table class="t" style="margin-top:8px"><thead><tr><th>Empleado</th><th class="num">En el ticket</th><th class="num">Vale ahora</th>' + (hayMan ? '<th class="num">Cargado a mano ese día</th>' : '') + '</tr></thead><tbody>' +
+    q.items.map(function (i) { var cor = e[i.p] !== i.c; return '<tr><td>' + esc(i.nombre) + '</td><td class="num">' + $m(i.c) + '</td><td class="num b"' + (cor ? ' style="color:#b45309"' : '') + '>' + $m(e[i.p]) + '</td>' + (hayMan ? '<td class="num">' + $m(man[i.p] || 0) + '</td>' : '') + '</tr>'; }).join('') +
+    '</tbody></table>' +
+    '<h4 style="margin:18px 0 6px">Revisiones</h4>' + (q.obs.length ? q.obs.map(function (o) { return '<div class="small" style="padding:6px 0;border-bottom:1px solid var(--line2)"><b>' + dmy(o.ts) + ' ' + String(o.ts).slice(11, 16) + '</b> · ' + esc(o.quien) + ' · ' + (o.accion === 'ok' ? '<span class="pill ok">Aprobado</span>' : o.accion === 'corr' || o.p ? '<span class="pill warn">Corrección</span>' : '<span class="pill">Observación</span>') +
+      ((o.cambios || (o.p ? [{ p: o.p, antes: o.antes, c: o.c }] : [])).map(function (x) { return '<div>' + esc(emp(x.p).nombre) + ': ' + $m(x.antes || 0) + ' → <b>' + $m(x.c) + '</b> (' + (x.c - (x.antes || 0) >= 0 ? '+' : '') + $m(x.c - (x.antes || 0)) + ')</div>'; }).join('')) + '<div>' + esc(o.texto) + '</div></div>'; }).join('') : '<div class="small muted">Todavía no lo revisaste.</div>');
+  var d = drawer('<div><div class="tiny muted">Paquete</div><b style="font-size:20px">N° ' + nroPaq(q.n) + '</b></div>', html,
+    '<button class="btn" id="dqRe">🖨️</button><button class="btn" id="dqObs">📝 Nota</button><button class="btn" id="dqCor">✏️ Corregir</button>' + (est !== 'ok' ? '<button class="btn pri" id="dqOk">✅ Está OK</button>' : ''));
   $('#dqRe', d.el).onclick = function () { imprimirTicket(ticketPaquete(q, true)); toast('Reimprimiendo paquete N° ' + nroPaq(q.n) + '.', 'ok'); };
+  if ($('#dqOk', d.el)) $('#dqOk', d.el).onclick = function () { d.cerrar(); registrarObsPaquete(q.id, 'ok', '').then(function () { festejar('Paquete N° ' + nroPaq(q.n) + ' aprobado'); refrescar(); }, function (er) { toast(er.message, 'err'); }); };
   $('#dqObs', d.el).onclick = function () {
     d.cerrar();
     setTimeout(function () {
-      modal('Observación del paquete N° ' + nroPaq(q.n), '<div class="form"><div class="f full"><label>Observación (obligatoria)</label><input id="oT" placeholder="Ej. En el paquete había $5.000 menos de Pérez"></div>' +
-        '<div class="f"><label>Corregir importe de (opcional)</label><select id="oP"><option value="">— Solo observación —</option>' + q.items.map(function (i) { return '<option value="' + esc(i.p) + '">' + esc(i.nombre) + ' (' + $m(e[i.p]) + ')</option>'; }).join('') + '</select></div><div class="f"><label>Importe correcto</label><input id="oC" inputmode="decimal" placeholder="$ 0"></div></div>' +
-        '<div class="small muted mt">El comprobante original no se modifica: la observación queda registrada aparte con tu nombre (' + esc(adminNombre()) + '), la fecha y la hora.</div>',
+      modal('Nota del paquete N° ' + nroPaq(q.n), '<div class="f"><label>Observación</label><input id="oT" placeholder="Ej. Se avisó al encargado del turno"></div><div class="small muted mt">Es solo una nota: no cambia importes ni el estado. Queda con tu nombre (' + esc(adminNombre()) + '), fecha y hora.</div>',
         [{ t: 'Cancelar' }, { t: 'Guardar', c: 'pri', fn: function (ov) {
-          var t = $('#oT', ov).value, p = $('#oP', ov).value, c = p ? parseAR($('#oC', ov).value) : undefined;
-          if (String(t).trim().length < 5) throw new Error('Escribí la observación (al menos 5 letras).');
-          if (p && (c === null || isNaN(c) || c < 0)) throw new Error('Ingresá el importe correcto.');
-          registrarObsPaquete(q.id, t, p, c).then(function () { festejar('Observación guardada'); refrescar(); }, function (er) { toast(er.message, 'err'); });
+          var t = $('#oT', ov).value; if (String(t).trim().length < 5) throw new Error('Escribí la observación (al menos 5 letras).');
+          registrarObsPaquete(q.id, 'obs', t).then(function () { festejar('Nota guardada'); refrescar(); }, function (er) { toast(er.message, 'err'); });
         } }]);
+    }, 220);
+  };
+  $('#dqCor', d.el).onclick = function () {
+    d.cerrar();
+    setTimeout(function () {
+      modal('Corregir paquete N° ' + nroPaq(q.n), '<p class="small muted" style="margin-top:0">Poné cuánto corresponde realmente a cada uno. La caja se mueve por la diferencia. El ticket original se conserva y la corrección queda registrada con tu nombre, fecha, hora y motivo.</p>' +
+        '<table class="t"><thead><tr><th>Empleado</th><th class="num">Vale ahora</th><th class="num">Correcto</th></tr></thead><tbody>' + q.items.map(function (i) { return '<tr data-cp="' + esc(i.p) + '"><td>' + esc(i.nombre) + '</td><td class="num">' + $m(e[i.p]) + '</td><td class="num"><input class="amt" data-cv inputmode="decimal" value="' + miles(e[i.p]) + '" style="width:130px"></td></tr>'; }).join('') + '</tbody></table>' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0"><span class="small">Movimiento de caja</span><b id="cDif" style="font-size:18px">$ 0</b></div>' +
+        '<div class="f"><label>Motivo (obligatorio)</label><input id="cM" placeholder="Ej. Contamos de nuevo: a Pérez le corresponden 5.000"></div>',
+        [{ t: 'Cancelar' }, { t: 'Guardar corrección', c: 'pri', fn: function (ov) {
+          var cambios = [], malo = false;
+          $$('[data-cp]', ov).forEach(function (tr) { var v = parseAR($('[data-cv]', tr).value); if (v === null || isNaN(v) || v < 0) malo = true; else cambios.push({ p: tr.dataset.cp, c: v }); });
+          if (malo) throw new Error('Hay un importe inválido.');
+          if (!cambios.some(function (x) { return x.c !== e[x.p]; })) throw new Error('No cambiaste ningún importe.');
+          var m = $('#cM', ov).value; if (String(m).trim().length < 5) throw new Error('Indicá el motivo de la corrección (al menos 5 letras).');
+          registrarObsPaquete(q.id, 'corr', m, cambios).then(function () { festejar('Paquete corregido'); refrescar(); }, function (er) { toast(er.message, 'err'); });
+        } }], 'lg');
+      setTimeout(function () {
+        var upd = function () { var dif = 0; $$('.ov [data-cp]').forEach(function (tr) { var v = parseAR($('[data-cv]', tr).value); if (v !== null && !isNaN(v)) dif += v - e[tr.dataset.cp]; }); var el = $('#cDif'); if (el) { el.textContent = (dif > 0 ? '+' : '') + $m(dif); el.style.color = dif < 0 ? 'var(--err)' : dif > 0 ? 'var(--ok)' : ''; } };
+        $$('.ov [data-cv]').forEach(function (i) { i.oninput = upd; }); upd();
+      }, 30);
     }, 220);
   };
 }
@@ -1858,9 +1926,10 @@ function pHistorial() {
         (datos.length ? datos.slice(0, 2500).map(function (c) {
           return '<tr><td>' + dmy(c.f) + '<div class="tiny muted">' + diaNombre(c.f) + '</div></td><td>' + persona(emp(c.p)) + '</td><td class="num b">' + (c.an ? '<s class="muted">' + $m(c.h.length ? (c.h[c.h.length - 1][1] || 0) : c.c) + '</s>' : $m(c.c)) + '</td>' +
             '<td class="small">' + (c.por === 'PLAYA' ? 'PLAYA' : esc(c.quien || 'Administrador')) + '<div class="tiny muted">' + (c.cr ? dmy(c.cr) + ' ' + String(c.cr).slice(11, 16) : '') + '</div></td>' +
-            '<td>' + (c.an ? '<span class="pill err">Anulada</span>' : c.h.length ? '<span class="pill warn" title="' + esc(c.h.map(function (z) { return dmy(z[0]) + ' ' + String(z[0]).slice(11, 16) + ': ' + (z[1] == null ? '—' : $m(z[1])) + ' → ' + (z[2] == null ? 'quitada' : $m(z[2])) + (z[4] ? ' · ' + z[4] : ''); }).join('\n')) + '">Corregida</span>' : '<span class="pill ok">Original</span>') + '</td><td style="text-align:right"><button class="btn sm" data-corr="' + esc(c.k) + '">Corregir</button></td></tr>';
+            '<td>' + (c.paq ? '<span class="pill">📦 N° ' + nroPaq(c.paqN) + '</span> ' + pillEstado(c.estado) : c.an ? '<span class="pill err">Anulada</span>' : c.h.length ? '<span class="pill warn" title="' + esc(c.h.map(function (z) { return dmy(z[0]) + ' ' + String(z[0]).slice(11, 16) + ': ' + (z[1] == null ? '—' : $m(z[1])) + ' → ' + (z[2] == null ? 'quitada' : $m(z[2])) + (z[4] ? ' · ' + z[4] : ''); }).join('\n')) + '">Corregida</span>' : '<span class="pill ok">Original</span>') + '</td><td style="text-align:right">' + (c.paq ? '<button class="btn sm" data-revpaq="' + esc(c.paq) + '">Revisar</button>' : '<button class="btn sm" data-corr="' + esc(c.k) + '">Corregir</button>') + '</td></tr>';
         }).join('') : '<tr><td colspan="6"><div class="empty"><div class="ic">📭</div><b>Sin propinas en el período</b></div></td></tr>') + '</tbody><tfoot><tr><td colspan="2">' + datos.length + ' registros</td><td class="num">' + $m(datos.reduce(function (a, c) { return a + (c.an ? 0 : c.c); }, 0)) + '</td><td colspan="3"></td></tr></tfoot></table></div></div>';
       $$('[data-corr]').forEach(function (b) { b.onclick = function () { corregirCarga(b.dataset.corr); }; });
+      $$('[data-revpaq]').forEach(function (b) { b.onclick = function () { detallePaquete(b.dataset.revpaq); }; });
     } else if (f.tab === 'corr') {
       datos = correcciones().filter(function (x) { var e = x.ev; return enRango(e.f, f.d, f.h) && (!q || (emp(e.p).nombre + ' ' + emp(e.pAntes).nombre + ' ' + (e.motivo || '')).toLowerCase().indexOf(q) >= 0); }).reverse();
       box.innerHTML = '<div class="card"><div class="bd p0 tw maxh"><table class="t"><thead><tr><th>Fecha y hora</th><th>Empleado</th><th>Día de la propina</th><th class="num">Original</th><th class="num">Corregido</th><th class="num">Diferencia</th><th>Administrador</th><th>Motivo</th></tr></thead><tbody class="stagger">' +
@@ -2000,7 +2069,7 @@ $('#fileRestore').onchange = function () {
 var PANT = { playa: pCargar, paquete: pPaquete, paquetes: pPaquetes, inicio: pInicio, cargar: pCargar, entregar: pEntregar, caja: pCaja, reportes: pReportes, historial: pHistorial, empleados: pEmpleados, ajustes: pAjustes };
 window.addEventListener('beforeunload', function (ev) { if (tG) guardarAhora(); if (sucio && sucio()) { ev.preventDefault(); ev.returnValue = ''; } });
 try { var bc = new BroadcastChannel('propinasBeraza'); bc.onmessage = function (ev) { if (ev.data === 'hola') bc.postMessage('ya'); else if (ev.data === 'ya') toast('El sistema ya está abierto en otra pestaña. Usá una sola para no pisar datos.', 'err'); }; bc.postMessage('hola'); } catch (e) { /* sin BroadcastChannel */ }
-window.__propinas = { get D() { return D; }, calc: calc, cajaDe: cajaDe, resumenSector: resumenSector, pendienteHasta: pendienteHasta, diasTrabajados: diasTrabajados, repartir: repartir, desglose: desglose, textoBilletes: textoBilletes, registrarEntrega: registrarEntrega, anularEntrega: anularEntrega, guardarEmpleado: guardarEmpleado, reporteDiario: reporteDiario, reportePeriodo: reportePeriodo, reporteEntrega: reporteEntrega, migrar: migrar, guardarAhora: guardarAhora, ir: ir, filasMovimientos: filasMovimientos, carpeta: function () { return CARP; }, escribirCarpeta: escribirCarpeta, nube: function () { return NUBE; }, subirNube: subirNube, registrarCarga: registrarCarga, registrarPaquete: registrarPaquete, registrarObsPaquete: registrarObsPaquete, ticketPaquete: ticketPaquete, controlDia: controlDia, paqList: paqList, registrarCorreccion: registrarCorreccion, construirCargas: construirCargas, comprobanteEntrega: comprobanteEntrega, comprobanteDia: comprobanteDia, generarReporte: function (r) { return generarReporte(r); }, playa: function () { return PL; } };
+window.__propinas = { get D() { return D; }, calc: calc, cajaDe: cajaDe, resumenSector: resumenSector, pendienteHasta: pendienteHasta, diasTrabajados: diasTrabajados, repartir: repartir, desglose: desglose, textoBilletes: textoBilletes, registrarEntrega: registrarEntrega, anularEntrega: anularEntrega, guardarEmpleado: guardarEmpleado, reporteDiario: reporteDiario, reportePeriodo: reportePeriodo, reporteEntrega: reporteEntrega, migrar: migrar, guardarAhora: guardarAhora, ir: ir, filasMovimientos: filasMovimientos, carpeta: function () { return CARP; }, escribirCarpeta: escribirCarpeta, nube: function () { return NUBE; }, subirNube: subirNube, registrarCarga: registrarCarga, registrarPaquete: registrarPaquete, registrarObsPaquete: registrarObsPaquete, estadoPaq: estadoPaq, totalEfectivo: totalEfectivo, ticketPaquete: ticketPaquete, controlDia: controlDia, paqList: paqList, registrarCorreccion: registrarCorreccion, construirCargas: construirCargas, comprobanteEntrega: comprobanteEntrega, comprobanteDia: comprobanteDia, generarReporte: function (r) { return generarReporte(r); }, playa: function () { return PL; } };
 if (/^https?:$/.test(location.protocol)) document.body.classList.add('bloq');
 iniciarAlmacenamiento().then(function () { REV++; pie(); ir('inicio'); return carpetaIniciar().then(function () { pie(); if (ACT === 'inicio' || ACT === 'ajustes') refrescar(); }).then(nubeIniciar).then(function () { document.body.classList.remove('bloq'); menu(); pie(); if (esPlaya()) ir('playa'); else refrescar(); }); }).catch(function (e) { document.body.classList.remove('bloq'); guardadoOK = false; pie(); ir('inicio'); toast('No se pudieron leer los datos guardados: ' + e.message, 'err'); });
 })();
