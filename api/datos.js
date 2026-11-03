@@ -123,6 +123,11 @@ module.exports = async function handler(req, res) {
 
     /* ---------- paquete de efectivo armado (ADMIN o PLAYA). No es un pago. */
     if (op === 'paquete') {
+      if (rol === 'playa') { // PLAYA no elige: fecha y turno salen de la hora de Argentina
+        const a = ar(), min = Number(a.slice(11, 13)) * 60 + Number(a.slice(14, 16)), f0 = a.slice(0, 10);
+        if (min < 340) { b.turno = 'N'; b.f = new Date(Date.parse(f0 + 'T12:00:00Z') - 86400000).toISOString().slice(0, 10); }
+        else { b.turno = min < 820 ? 'M' : min < 1300 ? 'T' : 'N'; b.f = f0; }
+      }
       if (!esId(b.id) || !['M', 'T', 'N'].includes(b.turno)) return enviar(res, 400, { error: 'Elegí el turno.' });
       const hoy = hoyAR();
       if (!esFecha(b.f) || b.f > hoy) return enviar(res, 400, { error: 'Fecha inválida.' });
