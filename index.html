@@ -485,7 +485,10 @@ function filasMovimientos() {
   });
   (D.eventos || []).filter(function (e) { return e.t === 'corr'; }).forEach(function (e) { var m = emp(e.p); out.push([e.ts, 'Corrección', dmy(e.f), m.nombre + (e.pAntes && e.pAntes !== e.p ? ' (antes ' + emp(e.pAntes).nombre + ')' : ''), m.legajo, e.c, e.c - e.antes, 'Original ' + $m(e.antes) + ' → corregido ' + $m(e.c), (e.motivo || '') + ' · ' + (e.quien || 'Administrador')]); });
   paqList().forEach(function (q) { q.items.forEach(function (i) { out.push([q.ts, 'Paquete N° ' + nroPaq(q.n), dmy(q.f), i.nombre, emp(i.p).legajo, i.c, i.c, 'Suma a caja · ' + textoEstado(estadoPaq(q)), 'Turno ' + turnoNom(q.turno) + ' · preparó ' + q.quien]); });
+    var vale = {}; q.items.forEach(function (i) { vale[i.p] = i.c; });
     q.obs.forEach(function (o) { var cs = o.cambios || (o.p ? [{ p: o.p, antes: o.antes, c: o.c }] : []);
+      if (o.accion === 'anular') { var t = Object.keys(vale).reduce(function (a, p) { return a + vale[p]; }, 0); Object.keys(vale).forEach(function (p) { vale[p] = 0; }); out.push([o.ts, 'Anulación paquete N° ' + nroPaq(q.n), dmy(q.f), '', '', t, -t, 'Anulado', o.texto + ' · ' + o.quien]); return; }
+      cs.forEach(function (x) { vale[x.p] = x.c; });
       if (!cs.length) out.push([o.ts, (o.accion === 'ok' ? 'Paquete aprobado' : 'Nota paquete') + ' N° ' + nroPaq(q.n), dmy(q.f), '', '', '', 0, o.accion === 'ok' ? 'Aprobado' : 'Observación', o.texto + ' · ' + o.quien]);
       cs.forEach(function (x) { out.push([o.ts, 'Corrección paquete N° ' + nroPaq(q.n), dmy(q.f), emp(x.p).nombre, emp(x.p).legajo, x.c, x.c - (x.antes || 0), 'Original ' + $m(x.antes || 0) + ' → corregido ' + $m(x.c), o.texto + ' · ' + o.quien]); }); }); });
   (D.arqueos || []).forEach(function (a) { out.push([a.ts, 'Arqueo', dmy(a.f), '', '', a.contado, a.c, a.c === 0 ? 'Sin diferencia' : a.c > 0 ? 'Sobrante' : 'Faltante', 'Sistema ' + $m(a.cajaAntes) + ' · contado ' + $m(a.contado) + ' · ' + a.motivo + ' · ' + a.quien]); });
@@ -894,7 +897,7 @@ function construirCargas(evs, paqs) {
     var os = obs[q.id] || [], est = estadoPaq({ obs: os });
     q.items.forEach(function (i) {
       var k = 'PQ|' + q.id + '|' + i.p, c = { k: k, f: q.f, s: SEC, p: i.p, c: i.c, an: !(i.c > 0), cr: q.ts, md: q.ts, por: q.por === 'PLAYA' ? 'PLAYA' : 'ADMIN', quien: q.quien, h: [], paq: q.id, paqN: q.n, estado: est };
-      os.forEach(function (o) { var nv = null; if (o.p === i.p) nv = o.c; (o.cambios || []).forEach(function (x) { if (x.p === i.p) nv = x.c; }); if (nv !== null && nv !== c.c) { c.h.push([o.ts, c.c, nv, o.quien || '', o.texto || '']); c.c = nv; c.an = !(nv > 0); c.md = o.ts; } });
+      os.forEach(function (o) { var nv = null; if (o.p === i.p) nv = o.c; (o.cambios || []).forEach(function (x) { if (x.p === i.p) nv = x.c; }); if (o.accion === 'anular') nv = 0; if (nv !== null && nv !== c.c) { c.h.push([o.ts, c.c, nv, o.quien || '', o.texto || '']); c.c = nv; c.an = !(nv > 0); c.md = o.ts; } });
       C[k] = c;
     });
   });
@@ -1368,12 +1371,12 @@ function paqList() {
   return fuente.filter(function (e) { return e.t === 'paq'; }).map(function (q) { return Object.assign({}, q, { obs: obs[q.id] || [] }); }).sort(function (a, b) { return b.n - a.n; });
 }
 /** Importe por empleado según el paquete, aplicando las correcciones auditadas del administrador. */
-function efectivoPaq(q) { var m = {}; q.items.forEach(function (i) { m[i.p] = i.c; }); q.obs.forEach(function (o) { if (o.p) m[o.p] = o.c; (o.cambios || []).forEach(function (x) { m[x.p] = x.c; }); }); return m; }
+function efectivoPaq(q) { var m = {}; q.items.forEach(function (i) { m[i.p] = i.c; }); q.obs.forEach(function (o) { if (o.p) m[o.p] = o.c; (o.cambios || []).forEach(function (x) { m[x.p] = x.c; }); if (o.accion === 'anular') Object.keys(m).forEach(function (p) { m[p] = 0; }); }); return m; }
 function totalEfectivo(q) { var e = efectivoPaq(q); return Object.keys(e).reduce(function (a, p) { return a + e[p]; }, 0); }
 /** pend = pendiente de revisar · ok = aprobado · corr = corregido por el administrador */
-function estadoPaq(q) { var est = 'pend'; (q.obs || []).forEach(function (o) { if (o.accion === 'ok') est = 'ok'; else if (o.accion === 'corr' || o.p || (o.cambios && o.cambios.length)) est = 'corr'; }); return est; }
-function pillEstado(e) { return e === 'ok' ? '<span class="pill ok">✓ Aprobado</span>' : e === 'corr' ? '<span class="pill warn">✏️ Corregido</span>' : '<span class="pill err">⏳ Pendiente de revisar</span>'; }
-function textoEstado(e) { return e === 'ok' ? 'Aprobado' : e === 'corr' ? 'Corregido' : 'Pendiente de revisar'; }
+function estadoPaq(q) { var est = 'pend'; (q.obs || []).forEach(function (o) { if (est === 'anul') return; if (o.accion === 'anular') est = 'anul'; else if (o.accion === 'ok') est = 'ok'; else if (o.accion === 'corr' || o.p || (o.cambios && o.cambios.length)) est = 'corr'; }); return est; }
+function pillEstado(e) { return e === 'anul' ? '<span class="pill">🚫 Anulado</span>' : e === 'ok' ? '<span class="pill ok">✓ Aprobado</span>' : e === 'corr' ? '<span class="pill warn">✏️ Corregido</span>' : '<span class="pill err">⏳ Pendiente de revisar</span>'; }
+function textoEstado(e) { return e === 'anul' ? 'Anulado' : e === 'ok' ? 'Aprobado' : e === 'corr' ? 'Corregido' : 'Pendiente de revisar'; }
 function paqPendientes() { return paqList().filter(function (q) { return estadoPaq(q) === 'pend'; }); }
 /** Lo cargado a mano por el administrador en "Cargar propinas" (sin contar los paquetes). */
 function declaradoDia(f) { var r = {}; Object.keys(D.cargas).forEach(function (k) { var c = D.cargas[k]; if (!c.an && !c.paq && c.f === f) r[c.p] = (r[c.p] || 0) + c.c; }); return r; }
@@ -1405,8 +1408,10 @@ function registrarPaquete(o) {
 function registrarObsPaquete(ref, accion, texto, cambios) {
   texto = String(texto || '').trim();
   if (accion === 'ok' && !texto) texto = 'Revisado: está OK';
+  if (accion === 'anular' && texto.length < 5) return Promise.reject(new Error('Indicá el motivo de la anulación (al menos 5 letras).'));
   if (texto.length < 5) return Promise.reject(new Error(accion === 'corr' ? 'Indicá el motivo de la corrección (al menos 5 letras).' : 'Escribí la observación (al menos 5 letras).'));
   var q = paqList().find(function (x) { return x.id === ref; }); if (!q) return Promise.reject(new Error('El paquete no existe.'));
+  if (estadoPaq(q) === 'anul' && accion !== 'obs') return Promise.reject(new Error('El paquete N° ' + nroPaq(q.n) + ' ya está anulado.'));
   var act = efectivoPaq(q), lista = [];
   if (accion === 'corr') {
     (cambios || []).forEach(function (x) { if (x.c !== act[x.p]) lista.push({ p: x.p, antes: act[x.p], c: x.c }); });
@@ -1416,7 +1421,8 @@ function registrarObsPaquete(ref, accion, texto, cambios) {
   var b = { id: uid('O'), ref: ref, accion: accion, texto: texto, quien: adminNombre() };
   if (lista.length) b.cambios = lista;
   var dif = lista.reduce(function (a, x) { return a + x.c - x.antes; }, 0);
-  var fin = function () { bitacora(accion === 'ok' ? 'PAQUETE APROBADO' : accion === 'corr' ? 'PAQUETE CORREGIDO' : 'OBS. PAQUETE', 'N° ' + nroPaq(q.n) + (lista.length ? ' · ' + lista.map(function (x) { return emp(x.p).nombre + ': ' + $m(x.antes) + ' → ' + $m(x.c); }).join(', ') + ' · caja ' + (dif >= 0 ? '+' : '') + $m(dif) : '') + ' · ' + texto + ' · ' + adminNombre()); guardar(); };
+  if (accion === 'anular') dif = -Object.keys(act).reduce(function (a, p) { return a + act[p]; }, 0);
+  var fin = function () { bitacora(accion === 'anular' ? 'PAQUETE ANULADO' : accion === 'ok' ? 'PAQUETE APROBADO' : accion === 'corr' ? 'PAQUETE CORREGIDO' : 'OBS. PAQUETE', (accion === 'anular' ? 'Sale de la caja ' + $m(-dif) + ' · ' : '') + 'N° ' + nroPaq(q.n) + (lista.length ? ' · ' + lista.map(function (x) { return emp(x.p).nombre + ': ' + $m(x.antes) + ' → ' + $m(x.c); }).join(', ') + ' · caja ' + (dif >= 0 ? '+' : '') + $m(dif) : '') + ' · ' + texto + ' · ' + adminNombre()); guardar(); };
   if (enNube()) {
     return api('POST', 'op=paqobs', b).then(function (j) {
       if (j._st !== 200) throw new Error(j.error || 'No se pudo guardar (error ' + j._st + ').');
@@ -1447,6 +1453,7 @@ function ticketPaquete(q, reimpresion) {
     (String(q.ts || '').slice(0, 10) !== q.f ? '<div class="mini">Preparado el ' + dmy(q.ts) + '</div>' : '') + '<div class="hr"></div>' +
     '<table><thead><tr><th>EMPLEADO</th><th class="n">IMPORTE</th></tr></thead><tbody>' + items.map(function (i) { return '<tr><td>' + esc(i.nombre) + '</td><td class="n">' + $w(i.c) + '</td></tr>'; }).join('') + '</tbody></table>' +
     '<div class="hr"></div><div class="tot"><span>TOTAL</span><span>' + $w(q.total) + '</span></div><div class="mini">' + items.length + ' empleado' + (items.length === 1 ? '' : 's') + '</div>' +
+    (reimpresion && q.obs && estadoPaq(q) === 'anul' ? '<div class="re" style="margin-top:2mm">PAQUETE ANULADO</div>' : '') +
     (reimpresion && q.obs && estadoPaq(q) === 'corr' ? '<div class="re" style="margin-top:2mm">CORREGIDO POR ADMINISTRACIÓN<br>VALE ' + $w(totalEfectivo(q)) + '</div>' : '') + '<div class="hr"></div>' +
     '<div>Preparado por: <b>' + esc(q.quien) + '</b></div>' +
     '<div class="firma">Firma</div><div class="firma">Control administrativo</div>' +
@@ -1552,7 +1559,7 @@ function pPaquete() {
 
 /* ---------- control de paquetes (solo administrador) */
 function pPaquetes() {
-  var f = F.pqs = F.pqs || { tab: 'lista' }; f.tab = 'lista';
+  var f = F.pqs = F.pqs || { tab: 'lista' }; f.tab = 'lista'; f.sel = f.sel || {};
   if (f.pend && !paqPendientes().length) f.pend = false;
   if (f.d === undefined) { var r = rango('mes'); f.d = r[0]; f.h = r[1]; }
   cab('Control de paquetes', 'Revisá los paquetes que armó el personal: si está OK lo aprobás, si no, lo corregís', '<button class="btn" id="qCsv">Exportar a Excel</button><button class="btn pri" data-go="paquete">📦 Armar entrega</button>');
@@ -1575,13 +1582,17 @@ function pPaquetes() {
       lista.forEach(function (x) { if (difDia[x.f] === undefined) difDia[x.f] = controlDia(x.f, todos).filas.some(function (r) { return r.dif !== 0; }); });
       filasCsv = [['N° paquete', 'Fecha', 'Turno', 'Preparado (fecha y hora)', 'Preparó', 'Estado', 'Empleado', 'Importe en el ticket', 'Importe corregido', 'Total que suma a caja', 'Revisiones']];
       lista.forEach(function (x) { var e = efectivoPaq(x); x.items.forEach(function (i) { filasCsv.push([nroPaq(x.n), dmy(x.f), turnoNom(x.turno), dmy(x.ts) + ' ' + String(x.ts).slice(11, 16), x.quien, textoEstado(estadoPaq(x)), i.nombre, csvNum(i.c), e[i.p] !== i.c ? csvNum(e[i.p]) : '', csvNum(totalEfectivo(x)), x.obs.map(function (o) { return o.texto; }).join(' | ')]); }); });
-      box.innerHTML = '<div class="card"><div class="bd p0 tw maxh"><table class="t"><thead><tr><th>N°</th><th>Fecha</th><th>Turno</th><th>Preparado</th><th>Empleados</th><th class="num">Suma a caja</th><th>Estado</th><th></th></tr></thead><tbody class="stagger">' +
+      box.innerHTML = '<div class="card"><div class="bd p0 tw maxh"><table class="t"><thead><tr><th style="width:36px"></th><th>N°</th><th>Fecha</th><th>Turno</th><th>Preparado</th><th>Empleados</th><th class="num">Suma a caja</th><th>Estado</th><th></th></tr></thead><tbody class="stagger">' +
         (lista.length ? lista.map(function (x) {
-          return '<tr class="click" data-paq="' + esc(x.id) + '"><td class="b">' + nroPaq(x.n) + '</td><td>' + dmy(x.f) + '</td><td>' + turnoNom(x.turno) + '</td><td class="small">' + dmy(x.ts) + ' ' + String(x.ts).slice(11, 16) + '<div class="tiny muted">' + esc(x.quien) + '</div></td><td class="small">' + x.items.length + '</td><td class="num b">' + $m(totalEfectivo(x)) + (totalEfectivo(x) !== x.total ? '<div class="tiny muted">ticket ' + $m(x.total) + '</div>' : '') + '</td>' +
+          var an = estadoPaq(x) === 'anul';
+          return '<tr class="click" data-paq="' + esc(x.id) + '"' + (an ? ' style="opacity:.55"' : '') + '><td>' + (an ? '' : '<input type="checkbox" data-selq="' + esc(x.id) + '"' + (f.sel[x.id] ? ' checked' : '') + '>') + '</td><td class="b">' + (an ? '<s>' + nroPaq(x.n) + '</s>' : nroPaq(x.n)) + '</td><td>' + dmy(x.f) + '</td><td>' + turnoNom(x.turno) + '</td><td class="small">' + dmy(x.ts) + ' ' + String(x.ts).slice(11, 16) + '<div class="tiny muted">' + esc(x.quien) + '</div></td><td class="small">' + x.items.length + '</td><td class="num b">' + $m(totalEfectivo(x)) + (totalEfectivo(x) !== x.total ? '<div class="tiny muted">ticket ' + $m(x.total) + '</div>' : '') + '</td>' +
             '<td>' + pillEstado(estadoPaq(x)) + '</td><td style="text-align:right"><button class="btn sm" data-reimp="' + esc(x.id) + '">🖨️</button></td></tr>';
-        }).join('') : '<tr><td colspan="8"><div class="empty"><div class="ic">📦</div><b>Sin paquetes en el período</b></div></td></tr>') +
-        '</tbody><tfoot><tr><td colspan="5">' + lista.length + ' paquetes</td><td class="num">' + $m(lista.reduce(function (a, x) { return a + totalEfectivo(x); }, 0)) + '</td><td colspan="2"></td></tr></tfoot></table></div></div>';
-      $$('[data-paq]').forEach(function (tr) { tr.onclick = function (ev) { if (ev.target.closest('[data-reimp]')) return; detallePaquete(tr.dataset.paq); }; });
+        }).join('') : '<tr><td colspan="9"><div class="empty"><div class="ic">📦</div><b>Sin paquetes en el período</b></div></td></tr>') +
+        '</tbody><tfoot><tr><td colspan="6">' + lista.length + ' paquetes <button class="btn sm dan" id="qAnSel" style="margin-left:10px' + (Object.keys(f.sel).length ? '' : ';display:none') + '">🚫 Anular seleccionados (' + Object.keys(f.sel).length + ')</button></td><td class="num">' + $m(lista.reduce(function (a, x) { return a + totalEfectivo(x); }, 0)) + '</td><td colspan="2"></td></tr></tfoot></table></div></div>';
+      $$('[data-paq]').forEach(function (tr) { tr.onclick = function (ev) { if (ev.target.closest('[data-reimp]') || ev.target.closest('[data-selq]')) return; detallePaquete(tr.dataset.paq); }; });
+      var pintarSel = function () { var n = Object.keys(f.sel).length, b = $('#qAnSel'); if (b) { b.style.display = n ? '' : 'none'; b.textContent = '🚫 Anular seleccionados (' + n + ')'; } };
+      $$('[data-selq]').forEach(function (cb) { cb.onchange = function () { if (cb.checked) f.sel[cb.dataset.selq] = 1; else delete f.sel[cb.dataset.selq]; pintarSel(); }; });
+      if ($('#qAnSel')) $('#qAnSel').onclick = function () { anularPaquetes(todos.filter(function (x) { return f.sel[x.id]; })); };
     } else {
       var dias = {};
       Object.keys(D.cargas).forEach(function (k) { var c = D.cargas[k]; if (!c.an && enRango(c.f, f.d, f.h)) dias[c.f] = 1; });
@@ -1601,6 +1612,19 @@ function pPaquetes() {
   cuerpo();
   $('#qCsv').onclick = function () { csv((f.tab === 'lista' ? 'paquetes_' : 'control_paquetes_') + hoy() + '.csv', filasCsv); };
 }
+/** Anula paquetes (por ejemplo, los de prueba). Siguen existiendo con su número, pero dejan de sumar a la caja. */
+function anularPaquetes(lista) {
+  lista = lista.filter(function (q) { return estadoPaq(q) !== 'anul'; });
+  if (!lista.length) { toast('No hay paquetes para anular.', 'err'); return; }
+  var tot = lista.reduce(function (a, q) { return a + totalEfectivo(q); }, 0);
+  modal('Anular ' + (lista.length === 1 ? 'paquete N° ' + nroPaq(lista[0].n) : lista.length + ' paquetes'), '<div class="banner warn">🚫 <div>' + (lista.length === 1 ? 'El paquete' : 'Los paquetes') + ' <b>' + lista.map(function (q) { return 'N° ' + nroPaq(q.n); }).join(', ') + '</b> ' + (lista.length === 1 ? 'deja' : 'dejan') + ' de sumar a la caja (<b>−' + $m(tot) + '</b>). No se borra' + (lista.length === 1 ? '' : 'n') + ': queda' + (lista.length === 1 ? '' : 'n') + ' como <b>Anulado</b> con su número, así la numeración sigue correlativa.</div></div>' +
+    '<div class="f"><label>Motivo (obligatorio)</label><input id="anPM" placeholder="Ej. Paquete de prueba"></div>',
+    [{ t: 'Cancelar' }, { t: 'Anular', c: 'dan s', fn: function (ov) {
+      var m = $('#anPM', ov).value.trim(); if (m.length < 5) throw new Error('Indicá el motivo de la anulación (al menos 5 letras).');
+      lista.reduce(function (pr, q) { return pr.then(function (n) { return registrarObsPaquete(q.id, 'anular', m).then(function () { return n + 1; }); }); }, Promise.resolve(0))
+        .then(function (n) { festejar(n === 1 ? 'Paquete anulado' : n + ' paquetes anulados'); F.pqs.sel = {}; refrescar(); }, function (er) { toast(er.message, 'err'); refrescar(); });
+    } }]);
+}
 function detallePaquete(id) {
   var todos = paqList(), q = todos.find(function (x) { return x.id === id; }); if (!q) return;
   var e = efectivoPaq(q), est = estadoPaq(q), man = declaradoDia(q.f), hayMan = Object.keys(man).length > 0, tot = totalEfectivo(q);
@@ -1609,10 +1633,12 @@ function detallePaquete(id) {
     '<table class="t" style="margin-top:8px"><thead><tr><th>Empleado</th><th class="num">En el ticket</th><th class="num">Vale ahora</th>' + (hayMan ? '<th class="num">Cargado a mano ese día</th>' : '') + '</tr></thead><tbody>' +
     q.items.map(function (i) { var cor = e[i.p] !== i.c; return '<tr><td>' + esc(i.nombre) + '</td><td class="num">' + $m(i.c) + '</td><td class="num b"' + (cor ? ' style="color:#b45309"' : '') + '>' + $m(e[i.p]) + '</td>' + (hayMan ? '<td class="num">' + $m(man[i.p] || 0) + '</td>' : '') + '</tr>'; }).join('') +
     '</tbody></table>' +
-    '<h4 style="margin:18px 0 6px">Revisiones</h4>' + (q.obs.length ? q.obs.map(function (o) { return '<div class="small" style="padding:6px 0;border-bottom:1px solid var(--line2)"><b>' + dmy(o.ts) + ' ' + String(o.ts).slice(11, 16) + '</b> · ' + esc(o.quien) + ' · ' + (o.accion === 'ok' ? '<span class="pill ok">Aprobado</span>' : o.accion === 'corr' || o.p ? '<span class="pill warn">Corrección</span>' : '<span class="pill">Observación</span>') +
-      ((o.cambios || (o.p ? [{ p: o.p, antes: o.antes, c: o.c }] : [])).map(function (x) { return '<div>' + esc(emp(x.p).nombre) + ': ' + $m(x.antes || 0) + ' → <b>' + $m(x.c) + '</b> (' + (x.c - (x.antes || 0) >= 0 ? '+' : '') + $m(x.c - (x.antes || 0)) + ')</div>'; }).join('')) + '<div>' + esc(o.texto) + '</div></div>'; }).join('') : '<div class="small muted">Todavía no lo revisaste.</div>');
+    '<h4 style="margin:18px 0 6px">Revisiones</h4>' + (q.obs.length ? q.obs.map(function (o) { return '<div class="small" style="padding:6px 0;border-bottom:1px solid var(--line2)"><b>' + dmy(o.ts) + ' ' + String(o.ts).slice(11, 16) + '</b> · ' + esc(o.quien) + ' · ' + (o.accion === 'anular' ? '' : o.accion === 'ok' ? '<span class="pill ok">Aprobado</span>' : o.accion === 'corr' || o.p ? '<span class="pill warn">Corrección</span>' : '<span class="pill">Observación</span>') +
+      (o.accion === 'anular' ? '<span class="pill err">Anulado</span>' : '') + ((o.cambios || (o.p ? [{ p: o.p, antes: o.antes, c: o.c }] : [])).map(function (x) { return '<div>' + esc(emp(x.p).nombre) + ': ' + $m(x.antes || 0) + ' → <b>' + $m(x.c) + '</b> (' + (x.c - (x.antes || 0) >= 0 ? '+' : '') + $m(x.c - (x.antes || 0)) + ')</div>'; }).join('')) + '<div>' + esc(o.texto) + '</div></div>'; }).join('') : '<div class="small muted">Todavía no lo revisaste.</div>');
   var d = drawer('<div><div class="tiny muted">Paquete</div><b style="font-size:20px">N° ' + nroPaq(q.n) + '</b></div>', html,
-    '<button class="btn" id="dqRe">🖨️</button><button class="btn" id="dqObs">📝 Nota</button><button class="btn" id="dqCor">✏️ Corregir</button>' + (est !== 'ok' ? '<button class="btn pri" id="dqOk">✅ Está OK</button>' : ''));
+    est === 'anul' ? '<button class="btn" id="dqRe">🖨️</button><button class="btn" id="dqObs">📝 Nota</button>' :
+    '<button class="btn" id="dqRe">🖨️</button><button class="btn dan" id="dqAn">🚫 Anular</button><button class="btn" id="dqObs">📝 Nota</button><button class="btn" id="dqCor">✏️ Corregir</button>' + (est !== 'ok' ? '<button class="btn pri" id="dqOk">✅ Está OK</button>' : ''));
+  if ($('#dqAn', d.el)) $('#dqAn', d.el).onclick = function () { d.cerrar(); setTimeout(function () { anularPaquetes([q]); }, 220); };
   $('#dqRe', d.el).onclick = function () { imprimirTicket(ticketPaquete(q, true)); toast('Reimprimiendo paquete N° ' + nroPaq(q.n) + '.', 'ok'); };
   if ($('#dqOk', d.el)) $('#dqOk', d.el).onclick = function () { d.cerrar(); registrarObsPaquete(q.id, 'ok', '').then(function () { festejar('Paquete N° ' + nroPaq(q.n) + ' aprobado'); refrescar(); }, function (er) { toast(er.message, 'err'); }); };
   $('#dqObs', d.el).onclick = function () {
@@ -2162,7 +2188,7 @@ $('#fileRestore').onchange = function () {
 var PANT = { playa: pCargar, paquete: pPaquete, paquetes: pPaquetes, inicio: pInicio, cargar: pCargar, entregar: pEntregar, caja: pCaja, reportes: pReportes, historial: pHistorial, empleados: pEmpleados, ajustes: pAjustes };
 window.addEventListener('beforeunload', function (ev) { if (tG) guardarAhora(); if (sucio && sucio()) { ev.preventDefault(); ev.returnValue = ''; } });
 try { var bc = new BroadcastChannel('propinasBeraza'); bc.onmessage = function (ev) { if (ev.data === 'hola') bc.postMessage('ya'); else if (ev.data === 'ya') toast('El sistema ya está abierto en otra pestaña. Usá una sola para no pisar datos.', 'err'); }; bc.postMessage('hola'); } catch (e) { /* sin BroadcastChannel */ }
-window.__propinas = { get D() { return D; }, calc: calc, cajaDe: cajaDe, resumenSector: resumenSector, pendienteHasta: pendienteHasta, diasTrabajados: diasTrabajados, repartir: repartir, desglose: desglose, textoBilletes: textoBilletes, registrarEntrega: registrarEntrega, anularEntrega: anularEntrega, guardarEmpleado: guardarEmpleado, reporteDiario: reporteDiario, reportePeriodo: reportePeriodo, reporteEntrega: reporteEntrega, migrar: migrar, guardarAhora: guardarAhora, ir: ir, filasMovimientos: filasMovimientos, carpeta: function () { return CARP; }, escribirCarpeta: escribirCarpeta, nube: function () { return NUBE; }, subirNube: subirNube, registrarCarga: registrarCarga, registrarPaquete: registrarPaquete, arqueo: arqueo, csvTexto: csvTexto, unirDocs: unirDocs, turnoYFecha: function () { return turnoYFecha(); }, registrarObsPaquete: registrarObsPaquete, estadoPaq: estadoPaq, totalEfectivo: totalEfectivo, ticketPaquete: ticketPaquete, controlDia: controlDia, paqList: paqList, registrarCorreccion: registrarCorreccion, construirCargas: construirCargas, comprobanteEntrega: comprobanteEntrega, comprobanteDia: comprobanteDia, generarReporte: function (r) { return generarReporte(r); }, playa: function () { return PL; } };
+window.__propinas = { get D() { return D; }, calc: calc, cajaDe: cajaDe, resumenSector: resumenSector, pendienteHasta: pendienteHasta, diasTrabajados: diasTrabajados, repartir: repartir, desglose: desglose, textoBilletes: textoBilletes, registrarEntrega: registrarEntrega, anularEntrega: anularEntrega, guardarEmpleado: guardarEmpleado, reporteDiario: reporteDiario, reportePeriodo: reportePeriodo, reporteEntrega: reporteEntrega, migrar: migrar, guardarAhora: guardarAhora, ir: ir, filasMovimientos: filasMovimientos, carpeta: function () { return CARP; }, escribirCarpeta: escribirCarpeta, nube: function () { return NUBE; }, subirNube: subirNube, registrarCarga: registrarCarga, registrarPaquete: registrarPaquete, arqueo: arqueo, anularPaquetes: anularPaquetes, csvTexto: csvTexto, unirDocs: unirDocs, turnoYFecha: function () { return turnoYFecha(); }, registrarObsPaquete: registrarObsPaquete, estadoPaq: estadoPaq, totalEfectivo: totalEfectivo, ticketPaquete: ticketPaquete, controlDia: controlDia, paqList: paqList, registrarCorreccion: registrarCorreccion, construirCargas: construirCargas, comprobanteEntrega: comprobanteEntrega, comprobanteDia: comprobanteDia, generarReporte: function (r) { return generarReporte(r); }, playa: function () { return PL; } };
 if (/^https?:$/.test(location.protocol)) document.body.classList.add('bloq');
 iniciarAlmacenamiento().then(function () { REV++; pie(); ir('inicio'); return carpetaIniciar().then(function () { pie(); if (ACT === 'inicio' || ACT === 'ajustes') refrescar(); }).then(nubeIniciar).then(function () { document.body.classList.remove('bloq'); menu(); pie(); if (esPlaya()) ir('playa'); else refrescar(); }); }).catch(function (e) { document.body.classList.remove('bloq'); guardadoOK = false; pie(); ir('inicio'); toast('No se pudieron leer los datos guardados: ' + e.message, 'err'); });
 })();
