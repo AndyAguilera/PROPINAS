@@ -1408,7 +1408,7 @@ function registrarPaquete(o) {
   if (enNube()) {
     return api('POST', 'op=paquete', b).then(function (j) {
       if (j._st !== 200 || !j.paq) throw new Error(j.error || 'No se pudo guardar el paquete (error ' + j._st + ').');
-      if (esPlaya()) { if (!(PL.paquetes || []).some(function (x) { return x.id === j.paq.id; })) { PL.paquetes = (PL.paquetes || []).concat([j.paq]); if (!j.dup) { PL.acum = PL.acum || {}; PL.acum[j.paq.f] = (PL.acum[j.paq.f] || 0) + j.paq.total; } } return j.paq; }
+      if (esPlaya()) { if (!(PL.paquetes || []).some(function (x) { return x.id === j.paq.id; })) { PL.paquetes = (PL.paquetes || []).concat([j.paq]); if (!j.dup) { PL.acum = PL.acum || {}; PL.acum[j.paq.f] = (PL.acum[j.paq.f] || 0) + j.paq.total; if (PL.caja) PL.caja.saldo += j.paq.total; } } return j.paq; }
       return traerEventos().then(function () { return j.paq; });
     }).catch(function (e) { throw errorRed(e); });
   }
@@ -1493,6 +1493,12 @@ function acumPorDia() {
   if (esPlaya()) return (PL && PL.acum) || {};
   var o = {}; paqList().forEach(function (q) { if (estadoPaq(q) !== 'anul') o[q.f] = (o[q.f] || 0) + totalEfectivo(q); }); return o;
 }
+/** Saldo de la caja de propinas: incluye el saldo inicial y el resto (arrastre) que quedó al repartir. */
+function saldoCaja() {
+  if (esPlaya()) { var c = PL && PL.caja; return c ? { saldo: c.saldo, inicial: c.inicial || 0, ult: c.ult } : { saldo: null }; }
+  var ents = D.entregas.filter(function (e) { return !e.anulada; }), u = ents[ents.length - 1];
+  return { saldo: cajaDe(SEC), inicial: cajaCfg(SEC).inicial || 0, ult: u ? { n: u.n, f: u.f, resto: u.cajaDespues || 0 } : null };
+}
 function cardAcumulado() {
   var A = acumPorDia(), hoyT = turnoYFecha().f, sem = [], mes = [];
   for (var i = 0; i < 6; i++) { var l = addD(lunes(hoyT), -7 * i), d = addD(l, 6); sem.push({ t: dmy(l).slice(0, 5) + ' al ' + dmy(d).slice(0, 5), d: l, h: d, cur: i === 0 }); }
@@ -1505,7 +1511,13 @@ function cardAcumulado() {
       return '<tr' + (x.cur ? ' style="background:var(--line2)"' : '') + '><td style="width:52%">' + esc(x.t) + (x.cur ? ' <span class="pill">en curso</span>' : '') + '<div class="barra PLAYA" style="margin-top:6px;height:5px"><i style="width:' + Math.round(x.c / mx * 100) + '%"></i></div></td><td class="num b">' + $m(x.c) + '</td></tr>';
     }).join('') + '</tbody></table></div>';
   }
-  return '<div class="card mt" id="qAcum"><div class="hd"><h3>📈 Acumulado de propinas</h3><span class="r tiny muted">Total de los paquetes · se ajusta si administración corrige o anula</span></div><div class="bd"><div class="grid g2">' +
+  var C = saldoCaja(), dsd = C.ult ? C.ult.resto : C.inicial, nuevo = C.saldo - dsd;
+  var cajaH = C.saldo == null ? '' : '<div id="qSaldo" style="display:flex;flex-wrap:wrap;gap:14px 34px;align-items:flex-end;padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--line2)">' +
+    '<div><div class="tiny muted" style="font-weight:700;letter-spacing:.4px">💰 SALDO EN CAJA PARA REPARTIR</div><div style="font-size:30px;font-weight:800;font-variant-numeric:tabular-nums" data-saldo="' + C.saldo + '">' + $m(C.saldo) + '</div></div>' +
+    '<div><div class="tiny muted">' + (C.ult ? 'Resto que quedó de la última entrega (N° ' + esc(C.ult.n) + ' del ' + dmy(C.ult.f) + ')' : 'Saldo inicial') + '</div><b style="font-size:17px" data-arrastre="' + dsd + '">' + $m(dsd) + '</b></div>' +
+    '<div style="font-size:20px;color:var(--muted)">+</div><div><div class="tiny muted">' + (C.ult ? 'Propinas desde la última entrega' : 'Propinas cargadas') + '</div><b style="font-size:17px">' + $m(nuevo) + '</b></div></div>';
+  return '<div class="card mt" id="qAcum"><div class="hd"><h3>📈 Acumulado de propinas</h3><span class="r tiny muted">Se ajusta si administración corrige o anula un paquete</span></div><div class="bd">' + cajaH +
+    '<div class="tiny muted" style="margin:0 0 10px">Propinas que entraron en cada semana y mes (total de los paquetes):</div><div class="grid g2">' +
     tabla('POR SEMANA (LUNES A DOMINGO)', sem) + tabla('POR MES', mes) + '</div></div></div>';
 }
 function pPaquete() {
