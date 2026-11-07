@@ -1418,7 +1418,7 @@ function registrarPaquete(o) {
   return Promise.resolve(q);
 }
 /** Revisión del administrador: accion 'ok' (está bien), 'corr' (cambia importes y mueve la caja) u 'obs' (solo nota). */
-function registrarObsPaquete(ref, accion, texto, cambios) {
+function registrarObsPaquete(ref, accion, texto, cambios, enLote) {
   texto = String(texto || '').trim();
   if (accion === 'ok' && !texto) texto = 'Revisado: está OK';
   if (accion === 'anular' && texto.length < 5) return Promise.reject(new Error('Indicá el motivo de la anulación (al menos 5 letras).'));
@@ -1439,6 +1439,7 @@ function registrarObsPaquete(ref, accion, texto, cambios) {
   if (enNube()) {
     return api('POST', 'op=paqobs', b).then(function (j) {
       if (j._st !== 200) throw new Error(j.error || 'No se pudo guardar (error ' + j._st + ').');
+      if (enLote) { fin(); return j.obs; } // en un lote se trae todo una sola vez, al final
       return traerEventos().then(function () { fin(); return j.obs; });
     }).catch(function (e) { throw errorRed(e); });
   }
@@ -1628,17 +1629,27 @@ function pPaquetes() {
       lista.forEach(function (x) { if (difDia[x.f] === undefined) difDia[x.f] = controlDia(x.f, todos).filas.some(function (r) { return r.dif !== 0; }); });
       filasCsv = [['N° paquete', 'Fecha', 'Turno', 'Preparado (fecha y hora)', 'Preparó', 'Estado', 'Empleado', 'Importe en el ticket', 'Importe corregido', 'Total que suma a caja', 'Revisiones']];
       lista.forEach(function (x) { var e = efectivoPaq(x); x.items.forEach(function (i) { filasCsv.push([nroPaq(x.n), dmy(x.f), turnoNom(x.turno), dmy(x.ts) + ' ' + String(x.ts).slice(11, 16), x.quien, textoEstado(estadoPaq(x)), i.nombre, csvNum(i.c), e[i.p] !== i.c ? csvNum(e[i.p]) : '', csvNum(totalEfectivo(x)), x.obs.map(function (o) { return o.texto; }).join(' | ')]); }); });
-      box.innerHTML = '<div class="card"><div class="bd p0 tw maxh"><table class="t"><thead><tr><th style="width:36px"></th><th>N°</th><th>Fecha</th><th>Turno</th><th>Preparado</th><th>Empleados</th><th class="num">Suma a caja</th><th>Estado</th><th></th></tr></thead><tbody class="stagger">' +
+      var selec = lista.filter(function (x) { return estadoPaq(x) !== 'anul'; });
+      box.innerHTML = '<div class="card"><div class="bd p0 tw maxh"><table class="t"><thead><tr><th style="width:36px">' + (selec.length ? '<input type="checkbox" id="qSelAll" title="Tildar todos"' + (selec.every(function (x) { return f.sel[x.id]; }) ? ' checked' : '') + '>' : '') + '</th><th>N°</th><th>Fecha</th><th>Turno</th><th>Preparado</th><th>Empleados</th><th class="num">Suma a caja</th><th>Estado</th><th></th></tr></thead><tbody class="stagger">' +
         (lista.length ? lista.map(function (x) {
           var an = estadoPaq(x) === 'anul';
           return '<tr class="click" data-paq="' + esc(x.id) + '"' + (an ? ' style="opacity:.55"' : '') + '><td>' + (an ? '' : '<input type="checkbox" data-selq="' + esc(x.id) + '"' + (f.sel[x.id] ? ' checked' : '') + '>') + '</td><td class="b">' + (an ? '<s>' + nroPaq(x.n) + '</s>' : nroPaq(x.n)) + '</td><td>' + dmy(x.f) + '</td><td>' + turnoNom(x.turno) + '</td><td class="small">' + dmy(x.ts) + ' ' + String(x.ts).slice(11, 16) + '<div class="tiny muted">' + esc(x.quien) + '</div></td><td class="small">' + x.items.length + '</td><td class="num b">' + $m(totalEfectivo(x)) + (totalEfectivo(x) !== x.total ? '<div class="tiny muted">ticket ' + $m(x.total) + '</div>' : '') + '</td>' +
             '<td>' + pillEstado(estadoPaq(x)) + '</td><td style="text-align:right"><button class="btn sm" data-reimp="' + esc(x.id) + '">🖨️</button></td></tr>';
         }).join('') : '<tr><td colspan="9"><div class="empty"><div class="ic">📦</div><b>Sin paquetes en el período</b></div></td></tr>') +
-        '</tbody><tfoot><tr><td colspan="6">' + lista.length + ' paquetes <button class="btn sm dan" id="qAnSel" style="margin-left:10px' + (Object.keys(f.sel).length ? '' : ';display:none') + '">🚫 Anular seleccionados (' + Object.keys(f.sel).length + ')</button></td><td class="num">' + $m(lista.reduce(function (a, x) { return a + totalEfectivo(x); }, 0)) + '</td><td colspan="2"></td></tr></tfoot></table></div></div>';
+        '</tbody><tfoot><tr><td colspan="6">' + lista.length + ' paquetes <button class="btn sm pri" id="qOkSel" style="margin-left:10px;display:none"></button><button class="btn sm dan" id="qAnSel" style="margin-left:8px;display:none"></button></td><td class="num">' + $m(lista.reduce(function (a, x) { return a + totalEfectivo(x); }, 0)) + '</td><td colspan="2"></td></tr></tfoot></table></div></div>';
       $$('[data-paq]').forEach(function (tr) { tr.onclick = function (ev) { if (ev.target.closest('[data-reimp]') || ev.target.closest('[data-selq]')) return; detallePaquete(tr.dataset.paq); }; });
-      var pintarSel = function () { var n = Object.keys(f.sel).length, b = $('#qAnSel'); if (b) { b.style.display = n ? '' : 'none'; b.textContent = '🚫 Anular seleccionados (' + n + ')'; } };
+      var elegidos = function () { return todos.filter(function (x) { return f.sel[x.id] && estadoPaq(x) !== 'anul'; }); };
+      var pintarSel = function () {
+        var el = elegidos(), n = el.length, nOk = el.filter(function (x) { return estadoPaq(x) !== 'ok'; }).length, b = $('#qAnSel'), bo = $('#qOkSel');
+        if (b) { b.style.display = n ? '' : 'none'; b.textContent = '🚫 Anular seleccionados (' + n + ')'; }
+        if (bo) { bo.style.display = nOk ? '' : 'none'; bo.textContent = '✅ Aprobar seleccionados (' + nOk + ')'; }
+        if ($('#qSelAll')) $('#qSelAll').checked = selec.length > 0 && selec.every(function (x) { return f.sel[x.id]; });
+      };
       $$('[data-selq]').forEach(function (cb) { cb.onchange = function () { if (cb.checked) f.sel[cb.dataset.selq] = 1; else delete f.sel[cb.dataset.selq]; pintarSel(); }; });
-      if ($('#qAnSel')) $('#qAnSel').onclick = function () { anularPaquetes(todos.filter(function (x) { return f.sel[x.id]; })); };
+      if ($('#qSelAll')) $('#qSelAll').onchange = function () { var on = this.checked; selec.forEach(function (x) { if (on) f.sel[x.id] = 1; else delete f.sel[x.id]; }); $$('[data-selq]').forEach(function (cb) { cb.checked = on; }); pintarSel(); };
+      if ($('#qAnSel')) $('#qAnSel').onclick = function () { anularPaquetes(elegidos()); };
+      if ($('#qOkSel')) $('#qOkSel').onclick = function () { aprobarPaquetes(elegidos()); };
+      pintarSel();
     } else {
       var dias = {};
       Object.keys(D.cargas).forEach(function (k) { var c = D.cargas[k]; if (!c.an && enRango(c.f, f.d, f.h)) dias[c.f] = 1; });
@@ -1659,6 +1670,23 @@ function pPaquetes() {
   $('#qCsv').onclick = function () { csv((f.tab === 'lista' ? 'paquetes_' : 'control_paquetes_') + hoy() + '.csv', filasCsv); };
 }
 /** Anula paquetes (por ejemplo, los de prueba). Siguen existiendo con su número, pero dejan de sumar a la caja. */
+/** Aprueba varios paquetes juntos ("Está OK"), sin tocar importes ni caja. */
+function aprobarPaquetes(lista) {
+  lista = lista.filter(function (q) { var e = estadoPaq(q); return e !== 'anul' && e !== 'ok'; });
+  if (!lista.length) { toast('Los paquetes elegidos ya están aprobados.', 'err'); return; }
+  var tot = lista.reduce(function (a, q) { return a + totalEfectivo(q); }, 0), corr = lista.filter(function (q) { return estadoPaq(q) === 'corr'; }).length;
+  modal('Aprobar ' + (lista.length === 1 ? 'paquete N° ' + nroPaq(lista[0].n) : lista.length + ' paquetes'),
+    '<div class="banner ok">✅ <div>' + (lista.length === 1 ? 'El paquete' : 'Los paquetes') + ' <b>' + lista.map(function (q) { return 'N° ' + nroPaq(q.n); }).join(', ') + '</b> ' + (lista.length === 1 ? 'queda' : 'quedan') + ' como <b>Aprobado</b> (total <b>' + $m(tot) + '</b>). No cambia ningún importe ni la caja.' + (corr ? ' ' + corr + ' ya ' + (corr === 1 ? 'tenía' : 'tenían') + ' una corrección tuya: se mantiene.' : '') + '</div></div>' +
+    '<div class="f"><label>Nota (opcional)</label><input id="okPM" placeholder="Revisado: está OK"></div>',
+    [{ t: 'Cancelar' }, { t: '✅ Aprobar ' + (lista.length === 1 ? '' : 'los ' + lista.length), c: 'pri', fn: function (ov) {
+      var m = $('#okPM', ov).value.trim();
+      if (m && m.length < 5) throw new Error('La nota tiene que tener al menos 5 letras (o dejala vacía).');
+      if (lista.length > 3) toast('Aprobando ' + lista.length + ' paquetes…', 'ok');
+      lista.reduce(function (pr, q, i) { return pr.then(function (n) { return registrarObsPaquete(q.id, 'ok', m, null, i < lista.length - 1).then(function () { return n + 1; }); }); }, Promise.resolve(0))
+        .then(function (n) { festejar(n === 1 ? 'Paquete aprobado' : n + ' paquetes aprobados'); F.pqs.sel = {}; refrescar(); },
+          function (er) { toast(er.message, 'err'); (enNube() ? traerEventos() : Promise.resolve()).then(refrescar, refrescar); });
+    } }]);
+}
 function anularPaquetes(lista) {
   lista = lista.filter(function (q) { return estadoPaq(q) !== 'anul'; });
   if (!lista.length) { toast('No hay paquetes para anular.', 'err'); return; }
