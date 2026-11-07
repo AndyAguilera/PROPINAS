@@ -24,8 +24,16 @@ const TOK_R = process.env[pref + '_REST_API_TOKEN'] || process.env.UPSTASH_REDIS
 const CLAVES = { admin: process.env.CLAVE_ADMIN || '', playa: process.env.CLAVE_PLAYA || '' };
 const K = { datos: 'propinas:datos', rev: 'propinas:rev', cambio: 'propinas:cambio', respHoy: 'propinas:respaldo:ultimo',
   emp: 'propinas:emp', ev: 'propinas:ev', ids: 'propinas:ids', c: 'propinas:c', tot: 'propinas:tot', pq: 'propinas:pq', pqseq: 'propinas:pqseq',
-  pqdia: 'propinas:pqdia', pqdiaOk: 'propinas:pqdia:ok' }; // pqdia: total de paquetes por fecha (con correcciones y anulaciones) para el acumulado de PLAYA
+  pqdia: 'propinas:pqdia', pqdiaOk: 'propinas:pqdia:ok', caja: 'propinas:caja' }; // pqdia: total de paquetes por fecha (con correcciones y anulaciones) para el acumulado de PLAYA
 const dia = f => 'propinas:dia:' + f, evd = f => 'propinas:evd:' + f;
+/** Parte de la caja que no son propinas (saldo inicial + arqueos − entregas) y el resto que quedó en la última entrega. Lo publica el administrador para PLAYA. */
+function resumenCaja(d) {
+  const cj = (d && d.caja && d.caja.PLAYA) || {}, inicial = Number(cj.inicial) || 0;
+  const aj = ((d && d.arqueos) || []).reduce((a, x) => a + (Number(x.c) || 0), 0);
+  const ents = ((d && d.entregas) || []).filter(e => !e.anulada);
+  const ent = ents.reduce((a, e) => a + (Number(e.total) || 0), 0), u = ents[ents.length - 1];
+  return { base: inicial + aj - ent, inicial, ult: u ? { n: u.n, f: u.f, resto: Number(u.cajaDespues) || 0 } : null };
+}
 /** Total vigente por fecha de los paquetes: aplica correcciones y anulaciones del administrador. */
 function totalesPorDia(lst) {
   const paqs = {}, out = {};
@@ -96,7 +104,7 @@ module.exports = async function handler(req, res) {
       if (rol === 'playa') {
         // PLAYA solo recibe los empleados habilitados y los paquetes del día del turno actual y del anterior (nada de propinas ni acumulados)
         const tf = turnoAR();
-        const r = await redis([['GET', K.emp], ['LRANGE', K.pq, -150, -1], ['GET', K.pqdiaOk], ['HGETALL', K.pqdia]]);
+        const r = await redis([['GET', K.emp], ['LRANGE', K.pq, -150, -1], ['GET', K.pqdiaOk], ['HGETALL', K.pqdia], ['GET', K.caja], ['HGETALL', K.tot]]);
         let acum = {};
         if (r[2] === '1') { const h = r[3] || []; for (let i = 0; i < h.length; i += 2) acum[h[i]] = Number(h[i + 1]) || 0; }
         else { // primera vez (o después de importar): se arma el acumulado por fecha con todos los paquetes
@@ -104,6 +112,12 @@ module.exports = async function handler(req, res) {
           const fs = Object.keys(acum);
           await redis([['DEL', K.pqdia]].concat(fs.length ? [['HSET', K.pqdia].concat([].concat.apply([], fs.map(f => [f, String(acum[f])])))] : []).concat([['SET', K.pqdiaOk, '1']]));
         }
+        // saldo en caja = saldo inicial + propinas (paquetes y cargas viejas) + arqueos − entregas: incluye el resto que quedó de la última entrega
+        let cj = r[4] ? JSON.parse(r[4]) : null;
+        if (!cj) { const [d] = await redis([['GET', K.datos]]); cj = resumenCaja(d ? JSON.parse(d) : null); await redis([['SET', K.caja, JSON.stringify(cj)]]); }
+        const tt = r[5] || []; let sumTot = 0; for (let i = 1; i < tt.length; i += 2) sumTot += Number(tt[i]) || 0;
+        const sumPq = Object.keys(acum).reduce((a, f) => a + (acum[f] || 0), 0);
+        const caja = { saldo: cj.base + sumTot + sumPq, inicial: cj.inicial, ult: cj.ult };
         const desde = new Date(Date.parse(tf.f + 'T12:00:00Z') - 400 * 86400000).toISOString().slice(0, 10);
         Object.keys(acum).forEach(f => { if (f < desde || !acum[f]) delete acum[f]; });
         const lst = (r[1] || []).map(x => JSON.parse(x)), anul = new Set(lst.filter(x => x.t === 'obs' && x.accion === 'anular').map(x => x.ref));
@@ -111,7 +125,7 @@ module.exports = async function handler(req, res) {
         const paquetes = lst.filter(x => x.t === 'paq' && (x.f === tf.f || x.f === ayer) && !anul.has(x.id)); // los anulados no se muestran en la playa
         let emp = r[0] ? JSON.parse(r[0]) : null;
         if (!emp) { const [d] = await redis([['GET', K.datos]]); const x = d ? JSON.parse(d) : null; emp = { empresa: (x && x.config && x.config.empresa && x.config.empresa.nombre) || '', empleados: ((x && x.empleados) || []).filter(m => m.activo && m.s === 'PLAYA').map(m => ({ id: m.id, nombre: m.nombre, legajo: m.legajo || '' })) }; }
-        return enviar(res, 200, { rol, hoy: tf.f, turno: tf.turno, empresa: emp.empresa, empleados: emp.empleados, tot: {}, dia: {}, cargas: [], paquetes, acum });
+        return enviar(res, 200, { rol, hoy: tf.f, turno: tf.turno, empresa: emp.empresa, empleados: emp.empleados, tot: {}, dia: {}, cargas: [], paquetes, acum, caja });
       }
       const desde = Math.max(0, parseInt(q.get('desde') || '0', 10) || 0);
       if (q.has('meta')) { const r = await redis([['MGET', K.rev, K.cambio], ['LLEN', K.ev], ['LLEN', K.pq]]); return enviar(res, 200, { rol, rev: Number(r[0][0] || 0), cambio: r[0][1] || '', n: r[1], npq: r[2] }); }
@@ -281,7 +295,7 @@ module.exports = async function handler(req, res) {
       const datos = b.datos; delete datos.eventos; delete datos.paquetes; datos.cargas = {};
       const txt = JSON.stringify(datos), nuevo = rev + 1, cambio = String(b.cambio || ''), hoy = hoyAR();
       const emp = { empresa: (datos.config && datos.config.empresa && datos.config.empresa.nombre) || '', empleados: (datos.empleados || []).filter(m => m.activo && m.s === 'PLAYA').map(m => ({ id: m.id, nombre: m.nombre, legajo: m.legajo || '' })) };
-      const cmds = [['SET', K.datos, txt], ['SET', K.rev, String(nuevo)], ['SET', K.cambio, cambio], ['SET', K.emp, JSON.stringify(emp)]];
+      const cmds = [['SET', K.datos, txt], ['SET', K.rev, String(nuevo)], ['SET', K.cambio, cambio], ['SET', K.emp, JSON.stringify(emp)], ['SET', K.caja, JSON.stringify(resumenCaja(datos))]];
       if (r[1] !== hoy) cmds.push(['SET', 'propinas:respaldo:' + hoy, txt, 'EX', 2592000], ['SET', K.respHoy, hoy]);
       await redis(cmds);
       return enviar(res, 200, { rol, rev: nuevo, cambio });
