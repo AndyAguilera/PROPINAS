@@ -23,8 +23,17 @@ const URL_R = (process.env[pref + '_REST_API_URL'] || process.env.UPSTASH_REDIS_
 const TOK_R = process.env[pref + '_REST_API_TOKEN'] || process.env.UPSTASH_REDIS_REST_TOKEN || '';
 const CLAVES = { admin: process.env.CLAVE_ADMIN || '', playa: process.env.CLAVE_PLAYA || '' };
 const K = { datos: 'propinas:datos', rev: 'propinas:rev', cambio: 'propinas:cambio', respHoy: 'propinas:respaldo:ultimo',
-  emp: 'propinas:emp', ev: 'propinas:ev', ids: 'propinas:ids', c: 'propinas:c', tot: 'propinas:tot', pq: 'propinas:pq', pqseq: 'propinas:pqseq' };
+  emp: 'propinas:emp', ev: 'propinas:ev', ids: 'propinas:ids', c: 'propinas:c', tot: 'propinas:tot', pq: 'propinas:pq', pqseq: 'propinas:pqseq',
+  pqdia: 'propinas:pqdia', pqdiaOk: 'propinas:pqdia:ok' }; // pqdia: total de paquetes por fecha (con correcciones y anulaciones) para el acumulado de PLAYA
 const dia = f => 'propinas:dia:' + f, evd = f => 'propinas:evd:' + f;
+/** Total vigente por fecha de los paquetes: aplica correcciones y anulaciones del administrador. */
+function totalesPorDia(lst) {
+  const paqs = {}, out = {};
+  lst.forEach(x => { if (x.t === 'paq') { const m = {}; x.items.forEach(i => { m[i.p] = i.c; }); paqs[x.id] = { f: x.f, m }; } });
+  lst.forEach(o => { const q = o.t === 'obs' && paqs[o.ref]; if (!q) return; if (o.p) q.m[o.p] = o.c; (o.cambios || []).forEach(c => { q.m[c.p] = c.c; }); if (o.accion === 'anular') Object.keys(q.m).forEach(p => { q.m[p] = 0; }); });
+  Object.keys(paqs).forEach(id => { const q = paqs[id]; out[q.f] = (out[q.f] || 0) + Object.keys(q.m).reduce((a, p) => a + q.m[p], 0); });
+  return out;
+}
 const MAX_FALLOS = 10, VENTANA = 900;          // 10 contraseñas mal en 15 minutos bloquean esa conexión
 const MAX_CARGA = 100000000;                   // $1.000.000 por carga (en centavos)
 
@@ -85,14 +94,24 @@ module.exports = async function handler(req, res) {
     /* ---------- lectura */
     if (req.method === 'GET') {
       if (rol === 'playa') {
-        // PLAYA solo recibe los empleados habilitados y los paquetes del día del turno actual (nada de propinas ni acumulados)
+        // PLAYA solo recibe los empleados habilitados y los paquetes del día del turno actual y del anterior (nada de propinas ni acumulados)
         const tf = turnoAR();
-        const r = await redis([['GET', K.emp], ['LRANGE', K.pq, -150, -1]]);
+        const r = await redis([['GET', K.emp], ['LRANGE', K.pq, -150, -1], ['GET', K.pqdiaOk], ['HGETALL', K.pqdia]]);
+        let acum = {};
+        if (r[2] === '1') { const h = r[3] || []; for (let i = 0; i < h.length; i += 2) acum[h[i]] = Number(h[i + 1]) || 0; }
+        else { // primera vez (o después de importar): se arma el acumulado por fecha con todos los paquetes
+          acum = totalesPorDia(((await redis([['LRANGE', K.pq, 0, -1]]))[0] || []).map(x => JSON.parse(x)));
+          const fs = Object.keys(acum);
+          await redis([['DEL', K.pqdia]].concat(fs.length ? [['HSET', K.pqdia].concat([].concat.apply([], fs.map(f => [f, String(acum[f])])))] : []).concat([['SET', K.pqdiaOk, '1']]));
+        }
+        const desde = new Date(Date.parse(tf.f + 'T12:00:00Z') - 400 * 86400000).toISOString().slice(0, 10);
+        Object.keys(acum).forEach(f => { if (f < desde || !acum[f]) delete acum[f]; });
         const lst = (r[1] || []).map(x => JSON.parse(x)), anul = new Set(lst.filter(x => x.t === 'obs' && x.accion === 'anular').map(x => x.ref));
-        const paquetes = lst.filter(x => x.t === 'paq' && x.f === tf.f && !anul.has(x.id)); // los anulados no se muestran en la playa
+        const ayer = new Date(Date.parse(tf.f + 'T12:00:00Z') - 86400000).toISOString().slice(0, 10); // también el día anterior: para el reporte del turno que acaba de terminar
+        const paquetes = lst.filter(x => x.t === 'paq' && (x.f === tf.f || x.f === ayer) && !anul.has(x.id)); // los anulados no se muestran en la playa
         let emp = r[0] ? JSON.parse(r[0]) : null;
         if (!emp) { const [d] = await redis([['GET', K.datos]]); const x = d ? JSON.parse(d) : null; emp = { empresa: (x && x.config && x.config.empresa && x.config.empresa.nombre) || '', empleados: ((x && x.empleados) || []).filter(m => m.activo && m.s === 'PLAYA').map(m => ({ id: m.id, nombre: m.nombre, legajo: m.legajo || '' })) }; }
-        return enviar(res, 200, { rol, hoy: tf.f, turno: tf.turno, empresa: emp.empresa, empleados: emp.empleados, tot: {}, dia: {}, cargas: [], paquetes });
+        return enviar(res, 200, { rol, hoy: tf.f, turno: tf.turno, empresa: emp.empresa, empleados: emp.empleados, tot: {}, dia: {}, cargas: [], paquetes, acum });
       }
       const desde = Math.max(0, parseInt(q.get('desde') || '0', 10) || 0);
       if (q.has('meta')) { const r = await redis([['MGET', K.rev, K.cambio], ['LLEN', K.ev], ['LLEN', K.pq]]); return enviar(res, 200, { rol, rev: Number(r[0][0] || 0), cambio: r[0][1] || '', n: r[1], npq: r[2] }); }
@@ -158,7 +177,7 @@ module.exports = async function handler(req, res) {
       }
       const [n] = await redis([['INCR', K.pqseq]]);
       const paq = { id: b.id, t: 'paq', n, f: b.f, turno: b.turno, ts: ahoraAR(), items: limpios, total: limpios.reduce((a, x) => a + x.c, 0), por: rol === 'playa' ? 'PLAYA' : 'ADMIN', quien: rol === 'playa' ? 'Usuario PLAYA' : String(b.quien || 'Administrador').slice(0, 60) };
-      const r = await redis([['RPUSH', K.pq, JSON.stringify(paq)]]);
+      const r = await redis([['RPUSH', K.pq, JSON.stringify(paq)], ['HINCRBY', K.pqdia, paq.f, paq.total]]);
       return enviar(res, 200, { paq, npq: r[0] });
     }
 
@@ -211,7 +230,8 @@ module.exports = async function handler(req, res) {
       }
       const [nuevo] = await redis([['HSETNX', K.ids, b.id, '1']]);
       if (!nuevo) return enviar(res, 200, { dup: true });
-      const r = await redis([['RPUSH', K.pq, JSON.stringify(obs)]]);
+      const mueve = accion === 'anular' ? -Object.keys(act).reduce((a, p) => a + act[p], 0) : (obs.cambios || []).reduce((a, x) => a + x.c - x.antes, 0);
+      const r = await redis([['RPUSH', K.pq, JSON.stringify(obs)]].concat(mueve ? [['HINCRBY', K.pqdia, paq.f, mueve]] : []));
       return enviar(res, 200, { obs, npq: r[0] });
     }
 
@@ -223,7 +243,7 @@ module.exports = async function handler(req, res) {
       const pqs = Array.isArray(b.paquetes) ? b.paquetes.filter(e => e && esId(e.id)) : [];
       if (pqs.length) {
         const [np] = await redis([['LLEN', K.pq]]);
-        if (!np) { const maxN = pqs.reduce((a, x) => Math.max(a, Number(x.n) || 0), 0); await redis([['RPUSH', K.pq].concat(pqs.map(x => JSON.stringify(x))), ['HSET', K.ids].concat([].concat.apply([], pqs.map(x => [x.id, '1']))), ['SET', K.pqseq, String(maxN)]]); }
+        if (!np) { const maxN = pqs.reduce((a, x) => Math.max(a, Number(x.n) || 0), 0); await redis([['SET', K.pqdiaOk, '0'], ['RPUSH', K.pq].concat(pqs.map(x => JSON.stringify(x))), ['HSET', K.ids].concat([].concat.apply([], pqs.map(x => [x.id, '1']))), ['SET', K.pqseq, String(maxN)]]); }
       }
       if (!evs.length) return enviar(res, 200, { n: 0 });
       const C = {};
