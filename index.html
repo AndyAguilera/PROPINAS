@@ -1316,7 +1316,7 @@ function corregirCarga(k) {
 function imprimir(titulo, cuerpo) {
   var w = window.open('', '_blank');
   if (!w) { toast('El navegador bloqueó la ventana. Permití las ventanas emergentes para imprimir.', 'err'); return null; }
-  w.document.write('<!doctype html><html lang="es"><head><meta charset="utf-8"><title>' + esc(titulo) + '</title><style>body{font-family:Inter,"Segoe UI",Arial,sans-serif;color:#111;margin:28px;font-size:13px}h1{font-size:18px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:14px}th,td{border:1px solid #999;padding:7px 8px;text-align:left}th{background:#f1f1f1;font-size:11px;text-transform:uppercase}td.n{text-align:right;white-space:nowrap}td.f{width:160px}.cab{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px 24px;margin-top:12px;border:1px solid #999;padding:10px}.cab b{display:block;font-size:10px;color:#555;text-transform:uppercase;font-weight:600;margin-bottom:2px}.tot td{font-weight:700;background:#fafafa}.firmas{display:flex;gap:40px;margin-top:64px}.firmas div{flex:1;border-top:1px solid #111;padding-top:6px;text-align:center}.pie{margin-top:24px;font-size:11px;color:#555}.np{margin-bottom:16px}.np button{font-size:15px;padding:8px 18px;cursor:pointer}@media print{body{margin:12mm}.np{display:none}}</style></head><body><div class="np"><button onclick="print()">🖨️ Imprimir</button></div>' + cuerpo +
+  w.document.write('<!doctype html><html lang="es"><head><meta charset="utf-8"><title>' + esc(titulo) + '</title><style>body{font-family:Inter,"Segoe UI",Arial,sans-serif;color:#111;margin:28px;font-size:13px}h1{font-size:18px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:14px}th,td{border:1px solid #999;padding:7px 8px;text-align:left}th{background:#f1f1f1;font-size:11px;text-transform:uppercase}td.n{text-align:right;white-space:nowrap}td.f{width:160px}.cab{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px 24px;margin-top:12px;border:1px solid #999;padding:10px}.cab b{display:block;font-size:10px;color:#555;text-transform:uppercase;font-weight:600;margin-bottom:2px}.tot td{font-weight:700;background:#fafafa}.firmas{display:flex;gap:40px;margin-top:64px}.firmas div{flex:1;border-top:1px solid #111;padding-top:6px;text-align:center}.pie{margin-top:24px;font-size:11px;color:#555}.np{margin-bottom:16px}.np button{font-size:15px;padding:8px 18px;cursor:pointer}.hoja{break-before:page;page-break-before:always;padding-top:4px}.hoja h2{font-size:14px;margin:0 0 8px}.tals{display:grid;grid-template-columns:1fr 1fr;gap:0}.tal{border:1.5px dashed #555;margin:-0.75px;padding:10px 14px;height:51mm;box-sizing:border-box;break-inside:avoid;page-break-inside:avoid;display:flex;flex-direction:column;justify-content:space-between}.tal .t1{display:flex;justify-content:space-between;font-size:10px;color:#444;text-transform:uppercase;letter-spacing:.3px}.tal .nom{font-size:17px;font-weight:800;line-height:1.15}.tal .leg{font-size:11px;color:#444}.tal .imp{font-size:30px;font-weight:800;letter-spacing:.3px;font-variant-numeric:tabular-nums}.tal .bil{font-size:10px;color:#333}.tal .pi{display:flex;justify-content:space-between;font-size:10px;color:#444}@page{margin:12mm}@media print{body{margin:0}.np{display:none}}.hoja~.pie{display:none}</style></head><body><div class="np"><button onclick="print()">🖨️ Imprimir</button></div>' + cuerpo +
     '<div class="pie">Impreso el ' + dmy(ahora()) + ' ' + ahora().slice(11, 16) + ' · Sistema de propinas · ' + esc(D.config.empresa.nombre) + '</div></body></html>');
   w.document.close();
   return w;
@@ -1324,6 +1324,18 @@ function imprimir(titulo, cuerpo) {
 function cabComprobante(titulo, extra) {
   var e = D.config.empresa;
   return '<h1>' + esc(titulo) + '</h1><div class="cab"><div><b>Estación</b>' + esc(e.nombre) + '</div><div><b>Razón social</b>' + esc(e.razon || e.nombre) + (e.cuit ? ' · CUIT ' + esc(e.cuit) : '') + '</div><div><b>Sector</b>PLAYA</div>' + extra.map(function (x) { return '<div><b>' + esc(x[0]) + '</b>' + esc(x[1]) + '</div>'; }).join('') + '</div>';
+}
+/** Talones recortables (uno por empleado) para abrochar al efectivo de cada uno. Van en otra hoja. */
+function talonesEntrega(en, items) {
+  var e = D.config.empresa, lista = items.filter(function (i) { return i.c > 0; });
+  if (!lista.length) return '';
+  var per = en.d || en.h ? textoPeriodo(en.d, en.h) : '';
+  return '<div class="hoja"><h2>✂ Talones para abrochar al efectivo · Entrega N° ' + esc(en.n) + ' · recortar por la línea punteada</h2><div class="tals">' +
+    lista.map(function (i) { var m = emp(i.p); return '<div class="tal"><div class="t1"><span>Propinas · Playa · ' + esc(e.nombre) + '</span><span>Entrega N° ' + esc(en.n) + '</span></div>' +
+      '<div><div class="nom">' + esc(m.nombre) + '</div><div class="leg">' + (m.legajo ? 'Legajo ' + esc(m.legajo) : '') + (i.dias ? (m.legajo ? ' · ' : '') + i.dias + ' día' + (i.dias === 1 ? '' : 's') + ' trabajado' + (i.dias === 1 ? '' : 's') : '') + '</div></div>' +
+      '<div class="imp">' + $m(i.c) + '</div>' +
+      '<div class="pi"><span>Fecha de entrega: ' + dmy(en.f) + '</span><span>' + (per ? 'Período: ' + esc(per) : '') + '</span></div></div>'; }).join('') +
+    '</div></div>';
 }
 function comprobanteEntrega(en) {
   var items = en.items.slice().sort(function (a, b) { return emp(a.p).nombre.localeCompare(emp(b.p).nombre, 'es'); });
@@ -1334,7 +1346,8 @@ function comprobanteEntrega(en) {
     '<tr class="tot"><td colspan="3">TOTAL ENTREGADO (' + items.length + ' empleados)</td><td class="n">' + $m(en.total) + '</td><td></td></tr></tbody></table>' +
     '<table style="width:auto;min-width:50%"><tbody>' + (en.sobrante ? '<tr><td>Sobrante del redondeo (queda en caja)</td><td class="n">' + $m(en.sobrante) + '</td></tr>' : '') + (en.cajaDespues != null ? '<tr><td>Queda en caja</td><td class="n">' + $m(en.cajaDespues) + '</td></tr>' : '') + '</tbody></table>' +
     (en.nota ? '<p>Observación: ' + esc(en.nota) + '</p>' : '') +
-    '<div class="firmas"><div>Entregó: ' + esc(en.quien || adminNombre()) + '</div><div>Controló</div></div>';
+    '<div class="firmas"><div>Entregó: ' + esc(en.quien || adminNombre()) + '</div><div>Controló</div></div>' +
+    (en.anulada || !items.some(function (i) { return i.c > 0; }) ? '' : '<div class="pie">Impreso el ' + dmy(ahora()) + ' ' + ahora().slice(11, 16) + ' · Sistema de propinas · ' + esc(D.config.empresa.nombre) + '</div>' + talonesEntrega(en, items));
   return imprimir('Comprobante ' + en.n, h);
 }
 function comprobanteDia(f) {
@@ -1395,7 +1408,7 @@ function registrarPaquete(o) {
   if (enNube()) {
     return api('POST', 'op=paquete', b).then(function (j) {
       if (j._st !== 200 || !j.paq) throw new Error(j.error || 'No se pudo guardar el paquete (error ' + j._st + ').');
-      if (esPlaya()) { if (!(PL.paquetes || []).some(function (x) { return x.id === j.paq.id; })) PL.paquetes = (PL.paquetes || []).concat([j.paq]); return j.paq; }
+      if (esPlaya()) { if (!(PL.paquetes || []).some(function (x) { return x.id === j.paq.id; })) { PL.paquetes = (PL.paquetes || []).concat([j.paq]); if (!j.dup) { PL.acum = PL.acum || {}; PL.acum[j.paq.f] = (PL.acum[j.paq.f] || 0) + j.paq.total; } } return j.paq; }
       return traerEventos().then(function () { return j.paq; });
     }).catch(function (e) { throw errorRed(e); });
   }
@@ -1473,15 +1486,35 @@ function engancharTabsPlaya() {
   if ($('#plAct')) $('#plAct').onclick = function () { refrescarPlaya().then(function (ok) { if (ok) toast('Actualizado.', 'ok'); }); };
   if ($('#plSalir')) $('#plSalir').onclick = function () { confirmar('Salir', '<p>Se cierra la sesión de PLAYA en este dispositivo. Lo cargado ya está guardado.</p>', 'Salir').then(function (ok) { if (ok) nubeSalir(); }); };
 }
-function botonesPlaya() { return '<button class="btn" id="plAct">↻ Actualizar</button><button class="btn" id="plSalir">Salir</button>'; }
+function botonesPlaya() { return '<button class="btn wa" data-rpaq>📲 Reporte WhatsApp</button><button class="btn" id="plAct">↻ Actualizar</button><button class="btn" id="plSalir">Salir</button>'; }
 
+/** Total de propinas en paquetes por fecha (con correcciones y anulaciones del administrador). */
+function acumPorDia() {
+  if (esPlaya()) return (PL && PL.acum) || {};
+  var o = {}; paqList().forEach(function (q) { if (estadoPaq(q) !== 'anul') o[q.f] = (o[q.f] || 0) + totalEfectivo(q); }); return o;
+}
+function cardAcumulado() {
+  var A = acumPorDia(), hoyT = turnoYFecha().f, sem = [], mes = [];
+  for (var i = 0; i < 6; i++) { var l = addD(lunes(hoyT), -7 * i), d = addD(l, 6); sem.push({ t: dmy(l).slice(0, 5) + ' al ' + dmy(d).slice(0, 5), d: l, h: d, cur: i === 0 }); }
+  var m0 = hoyT.slice(0, 7) + '-01';
+  for (var j = 0; j < 6; j++) { var dm = dI(m0); dm.setMonth(dm.getMonth() - j); var di = isoLocal(dm); mes.push({ t: mesNombre(di), d: di, h: finMes(di), cur: j === 0 }); }
+  function tot(x) { return Object.keys(A).reduce(function (a, f) { return f >= x.d && f <= x.h ? a + (A[f] || 0) : a; }, 0); }
+  function tabla(titulo, l) {
+    l.forEach(function (x) { x.c = tot(x); }); var mx = Math.max.apply(null, l.map(function (x) { return x.c; }).concat([1]));
+    return '<div><div class="tiny muted" style="font-weight:700;letter-spacing:.4px;margin:0 0 6px">' + titulo + '</div><table class="t"><tbody>' + l.map(function (x) {
+      return '<tr' + (x.cur ? ' style="background:var(--line2)"' : '') + '><td style="width:52%">' + esc(x.t) + (x.cur ? ' <span class="pill">en curso</span>' : '') + '<div class="barra PLAYA" style="margin-top:6px;height:5px"><i style="width:' + Math.round(x.c / mx * 100) + '%"></i></div></td><td class="num b">' + $m(x.c) + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+  }
+  return '<div class="card mt" id="qAcum"><div class="hd"><h3>📈 Acumulado de propinas</h3><span class="r tiny muted">Total de los paquetes · se ajusta si administración corrige o anula</span></div><div class="bd"><div class="grid g2">' +
+    tabla('POR SEMANA (LUNES A DOMINGO)', sem) + tabla('POR MES', mes) + '</div></div></div>';
+}
 function pPaquete() {
   var tf = turnoYFecha(), hoyR = esPlaya() && PL ? PL.hoy : hoy(), fija = esPlaya();
   var st = F.pq = F.pq || { fAuto: true, tAuto: true }; st.items = st.items || [];
   // PLAYA: fecha y turno siempre automáticos según la hora. Administrador: automáticos salvo que los cambie a mano.
   if (fija || !st.f || st.fAuto) st.f = tf.f; if (fija || !st.turno || st.tAuto) st.turno = tf.turno;
   var maxF = tf.f > hoyR ? tf.f : hoyR; if (st.f > maxF) st.f = maxF;
-  cab('📦 Armar entrega', 'Preparar paquete de propinas · ' + ((esPlaya() && PL && PL.empresa) || D.config.empresa.nombre) + ' · Playa', esPlaya() ? botonesPlaya() : '<button class="btn" data-go="paquetes">Control de paquetes</button>');
+  cab('📦 Armar entrega', 'Preparar paquete de propinas · ' + ((esPlaya() && PL && PL.empresa) || D.config.empresa.nombre) + ' · Playa', esPlaya() ? botonesPlaya() : '<button class="btn wa" data-rpaq>📲 Reporte WhatsApp</button><button class="btn" data-go="paquetes">Control de paquetes</button>');
   var emps = empleadosPaquete(), enPaq = {}; st.items.forEach(function (i) { enPaq[i.p] = 1; });
   var sT = segmento('qT', TURNOS, st.turno, function (v) { st.turno = v; st.tAuto = false; }, 'big');
   var h = tabsPlaya('paquete') + '<div class="banner info">📦 <div>Contá el dinero, agregá a cada empleado con lo que le corresponde y confirmá. <b>El paquete suma a la caja de propinas</b> y queda <b>pendiente de revisión</b> del administrador. No es un pago.</div></div>' +
@@ -1497,9 +1530,9 @@ function pPaquete() {
     '</div><div class="bd" style="border-top:1px solid var(--line2)"><div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap"><div><div class="small muted">Total del paquete</div><div id="qTot" style="font-size:30px;font-weight:800;font-variant-numeric:tabular-nums">$ 0</div><div class="tiny muted" id="qInfo"></div></div>' +
     '<button class="btn pri lg" id="qOk">🖨️ Confirmar e imprimir</button></div></div></div></div>';
   var lista = paqList().slice(0, esPlaya() ? 50 : 15);
-  h += '<div class="card mt"><div class="hd"><h3>' + (esPlaya() ? 'Paquetes armados hoy' : 'Últimos paquetes') + '</h3></div><div class="bd p0 tw"><table class="t"><thead><tr><th>N°</th><th>Fecha</th><th>Turno</th><th>Hora</th><th>Empleados</th><th class="num">Total</th><th>Preparó</th><th></th></tr></thead><tbody>' +
+  h += '<div class="card mt"><div class="hd"><h3>' + (esPlaya() ? 'Paquetes recientes (hoy y ayer)' : 'Últimos paquetes') + '</h3><span class="r"><button class="btn sm wa" data-rpaq>📲 Copiar reporte del turno</button></span></div><div class="bd p0 tw"><table class="t"><thead><tr><th>N°</th><th>Fecha</th><th>Turno</th><th>Hora</th><th>Empleados</th><th class="num">Total</th><th>Preparó</th><th></th></tr></thead><tbody>' +
     (lista.length ? lista.map(function (q) { return '<tr><td class="b">' + nroPaq(q.n) + '</td><td>' + dmy(q.f) + '</td><td>' + turnoNom(q.turno) + '</td><td>' + String(q.ts).slice(11, 16) + '</td><td class="small">' + q.items.length + '</td><td class="num b">' + $m(q.total) + '</td><td class="small">' + esc(q.quien) + '</td><td style="text-align:right"><button class="btn sm" data-reimp="' + esc(q.id) + '">🖨️ Reimprimir</button></td></tr>'; }).join('')
-      : '<tr><td colspan="8"><div class="empty"><div class="ic">📦</div><b>Todavía no hay paquetes</b></div></td></tr>') + '</tbody></table></div></div>';
+      : '<tr><td colspan="8"><div class="empty"><div class="ic">📦</div><b>Todavía no hay paquetes</b></div></td></tr>') + '</tbody></table></div></div>' + cardAcumulado();
   $('#view').innerHTML = h; if (!fija) sT.enganchar(); engancharTabsPlaya();
   clearInterval(window.__relojPaq);
   window.__relojPaq = setInterval(function () { // con la página abierta, cambia sola de turno y de día
@@ -1508,6 +1541,7 @@ function pPaquete() {
     if (fija && (n.f !== st.f || n.turno !== st.turno)) { st.f = n.f; st.turno = n.turno; if ($('#qFtxt')) $('#qFtxt').textContent = diaNombre(st.f) + ' ' + dmy(st.f); if ($('#qTtxt')) $('#qTtxt').textContent = (TURNOS.find(function (t) { return t[0] === st.turno; }) || [0, ''])[1]; }
   }, 20000);
   $$('[data-go]').forEach(function (b) { b.onclick = function () { ir(b.dataset.go); }; });
+  $$('[data-rpaq]').forEach(function (b) { b.onclick = ventanaReportePaq; });
   if ($('#qF')) $('#qF').onchange = function () { if (this.value) { st.f = this.value; st.fAuto = this.value === tf.f; } };
   $('#qPapel').onchange = function () { try { localStorage.setItem('propinasBeraza.papel', this.value); } catch (e) { /* sin almacenamiento */ } };
   $('#qQ').oninput = function () { var t = this.value.trim().toLowerCase(); $$('[data-add]').forEach(function (b) { b.style.display = !t || b.dataset.n.indexOf(t) >= 0 ? '' : 'none'; }); };
@@ -1972,13 +2006,77 @@ function reporteEntrega(en) {
   if (en.cajaDespues != null) L.push('📌 QUEDA EN CAJA: ' + $w(en.cajaDespues));
   else if (en.saldoSector != null) L.push('📌 SALDO RESTANTE DEL SECTOR: ' + $w(en.saldoSector));
   if (en.nota) L.push('📝 ' + en.nota);
-  return { titulo: 'Reporte de entrega', comp: function () { comprobanteEntrega(en); }, texto: L.join('\n'), csv: [['N°', 'Fecha', 'Período', 'Empleado', 'Días', 'Entregado', 'Importe a mano']].concat(items.map(function (i) { return [en.n, dmy(en.f), en.d || en.h ? textoPeriodo(en.d, en.h) : '', emp(i.p).nombre, i.dias || '', csvNum(i.c), i.manual ? 'Sí' : '']; })).concat([['', '', '', 'TOTAL', '', csvNum(en.total), '']]).concat(en.sobrante ? [['', '', '', 'Sobrante del redondeo (queda en caja)', '', csvNum(en.sobrante), '']] : []) };
+  return { titulo: 'Reporte de entrega', compTxt: '🧾 Comprobante y talones', comp: function () { comprobanteEntrega(en); }, texto: L.join('\n'), csv: [['N°', 'Fecha', 'Período', 'Empleado', 'Días', 'Entregado', 'Importe a mano']].concat(items.map(function (i) { return [en.n, dmy(en.f), en.d || en.h ? textoPeriodo(en.d, en.h) : '', emp(i.p).nombre, i.dias || '', csvNum(i.c), i.manual ? 'Sí' : '']; })).concat([['', '', '', 'TOTAL', '', csvNum(en.total), '']]).concat(en.sobrante ? [['', '', '', 'Sobrante del redondeo (queda en caja)', '', csvNum(en.sobrante), '']] : []) };
+}
+/* ---------- reporte de paquetes por turno o por día (PLAYA y administrador) */
+var ORDEN_T = ['N', 'M', 'T'];
+var HORARIO_T = { M: '06:30 a 14:30', T: '14:30 a 22:30', N: '22:30 a 06:30' };
+var ICO_T = { M: '🌅', T: '☀️', N: '🌙' };
+function turnoAnterior(x) { return x.turno === 'T' ? { turno: 'M', f: x.f } : x.turno === 'M' ? { turno: 'N', f: x.f } : { turno: 'T', f: addD(x.f, -1) }; }
+function horarioTurno(t, f) { return t === 'N' ? '22:30 del ' + dmy(addD(f, -1)).slice(0, 5) + ' a 06:30' : HORARIO_T[t]; }
+function empresaRep() { return ((esPlaya() && PL && PL.empresa) || D.config.empresa.nombre || '').toUpperCase(); }
+function paqDe(f, turno) { return paqList().filter(function (q) { return q.f === f && (!turno || q.turno === turno) && estadoPaq(q) !== 'anul'; }).sort(function (a, b) { return a.n - b.n; }); }
+/** Líneas de un paquete con los importes vigentes (si el administrador lo corrigió, los corregidos). */
+function itemsRep(q) {
+  var e = efectivoPaq(q), nom = {}; q.items.forEach(function (i) { nom[i.p] = i.nombre; });
+  return Object.keys(e).filter(function (p) { return e[p] > 0; }).map(function (p) { return { p: p, nombre: nom[p] || nombreDe(p), c: e[p] }; }).sort(function (a, b) { return String(a.nombre).localeCompare(String(b.nombre), 'es'); });
+}
+function horaPaq(q) { var ts = String(q.ts || ''); return ts.slice(11, 16) + ' hs' + (ts.slice(0, 10) && ts.slice(0, 10) !== q.f ? ' (' + dmy(ts).slice(0, 5) + ')' : ''); }
+function reportePaquetes(f, turno) {
+  var qs = paqDe(f, turno), admin = !esPlaya(), por = {}, nom = {}, tot = 0, rows = [['N°', 'Fecha', 'Turno', 'Hora', 'Empleado', 'Importe', 'Estado']];
+  var L = ['📦 PAQUETES DE PROPINAS', '📍 ' + empresaRep() + ' · ⛽ PLAYA', '📅 ' + diaNombre(f) + ' ' + dmy(f)];
+  L.push(turno ? ICO_T[turno] + ' Turno ' + turnoNom(turno) + ' (' + horarioTurno(turno, f) + ')' : '🗓️ Día completo (los 3 turnos)');
+  L.push('');
+  function sumar(q) { return itemsRep(q).reduce(function (a, i) { por[i.p] = (por[i.p] || 0) + i.c; nom[i.p] = i.nombre; rows.push([nroPaq(q.n), dmy(q.f), turnoNom(q.turno), String(q.ts || '').slice(11, 16), i.nombre, csvNum(i.c), textoEstado(estadoPaq(q))]); return a + i.c; }, 0); }
+  function marca(q) { var e = estadoPaq(q); return !admin ? '' : e === 'corr' ? ' ✏️ corregido' : e === 'pend' ? ' ⏳' : ''; }
+  if (turno) {
+    if (!qs.length) L.push('Sin paquetes en el turno.');
+    qs.forEach(function (q) {
+      var it = itemsRep(q), t = sumar(q); tot += t;
+      L.push('📦 N° ' + nroPaq(q.n) + ' · ' + horaPaq(q) + ' · ' + $w(t) + marca(q));
+      it.forEach(function (i) { L.push('   👤 ' + i.nombre + ': ' + $w(i.c)); });
+      L.push('');
+    });
+  } else {
+    ORDEN_T.forEach(function (t) {
+      var del = qs.filter(function (q) { return q.turno === t; }), sub = 0;
+      L.push(ICO_T[t] + ' ' + turnoNom(t).toUpperCase() + ' (' + horarioTurno(t, f) + ')');
+      if (!del.length) L.push('   Sin paquetes');
+      del.forEach(function (q) { var x = sumar(q); sub += x; L.push('   📦 N° ' + nroPaq(q.n) + ' · ' + horaPaq(q) + ' · ' + q.items.length + ' emp. · ' + $w(x) + marca(q)); });
+      if (del.length) L.push('   Subtotal ' + turnoNom(t) + ': ' + $w(sub));
+      tot += sub; L.push('');
+    });
+  }
+  var ps = Object.keys(por).sort(function (a, b) { return String(nom[a]).localeCompare(String(nom[b]), 'es'); });
+  if (ps.length && (!turno || qs.length > 1)) { L.push('👥 POR EMPLEADO'); ps.forEach(function (p) { L.push(lin(nom[p], por[p])); }); L.push(''); }
+  L.push(LINEA, '💰 TOTAL ' + (turno ? 'DEL TURNO' : 'DEL DÍA') + ': ' + $w(tot));
+  if (qs.length) L.push('📦 ' + qs.length + ' paquete' + (qs.length === 1 ? '' : 's') + ' · 👥 ' + ps.length + ' empleado' + (ps.length === 1 ? '' : 's'));
+  if (admin) { var pen = qs.filter(function (q) { return estadoPaq(q) === 'pend'; }).length; if (pen) L.push('⏳ ' + pen + ' paquete' + (pen === 1 ? '' : 's') + ' sin revisar'); }
+  var a = ahora(); L.push('🕒 Enviado: ' + dmy(a).slice(0, 5) + ' ' + a.slice(11, 16));
+  rows.push(['', '', '', '', 'TOTAL', csvNum(tot), '']);
+  return { titulo: turno ? 'Paquetes turno ' + turnoNom(turno) : 'Paquetes del día', texto: L.join('\n'), csv: rows, vacio: !qs.length, total: tot, n: qs.length };
+}
+function abrirWhatsApp(txt) { window.open('https://wa.me/?text=' + encodeURIComponent(txt), '_blank', 'noopener'); }
+/** Ventana "Reporte para WhatsApp" de la pantalla Armar entrega. */
+function ventanaReportePaq() {
+  var cur = turnoYFecha(), ant = turnoAnterior(cur), ayer = addD(cur.f, -1);
+  var ops = [['act', 'Turno actual', cur.f, cur.turno], ['ant', 'Turno anterior', ant.f, ant.turno], ['dia', 'Día ' + dmy(cur.f).slice(0, 5), cur.f, ''], ['diaAnt', 'Día ' + dmy(ayer).slice(0, 5), ayer, '']];
+  var sel = !paqDe(cur.f, cur.turno).length && paqDe(ant.f, ant.turno).length ? 'ant' : 'act', rep = null;
+  var html = '<div class="tiny muted" style="margin-bottom:6px">¿Qué querés mandar?</div><div class="chips" id="rpOps" style="margin-bottom:14px">' + ops.map(function (o) { return '<button class="chip' + (o[0] === sel ? ' on' : '') + '" data-rp="' + o[0] + '">' + esc(o[1]) + (o[3] ? ' · ' + turnoNom(o[3]) : '') + '</button>'; }).join('') + '</div><div id="rpPrev"></div>';
+  modal('Reporte para WhatsApp', html, [{ t: 'Cerrar' }, { t: 'Abrir WhatsApp', fn: function () { abrirWhatsApp(rep.texto); return false; } }, { t: '📋 Copiar reporte', c: 'wa', fn: function (ov, btn) { copiar(rep.texto, btn); return false; } }], 'lg');
+  function mostrar() {
+    var o = ops.find(function (x) { return x[0] === sel; }); rep = reportePaquetes(o[2], o[3]);
+    $('#rpPrev').innerHTML = (rep.vacio ? '<div class="banner warn">No hay paquetes para lo elegido. Igual podés mandar el reporte.</div>' : '') + burbuja(rep.texto);
+    $$('[data-rp]').forEach(function (b) { b.classList.toggle('on', b.dataset.rp === sel); });
+  }
+  $$('[data-rp]').forEach(function (b) { b.onclick = function () { sel = b.dataset.rp; mostrar(); }; });
+  mostrar();
 }
 function burbuja(txt) { var d = new Date(); return '<div class="chat"><div class="burbuja">' + esc(txt) + '<span class="hora">' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ' ✓✓</span></div></div>'; }
 function verReporte(r) {
-  return modal(r.titulo, burbuja(r.texto), [{ t: 'Cerrar' }].concat(r.comp ? [{ t: '🧾 Comprobante', fn: function () { r.comp(); return false; } }] : []).concat([{ t: 'Excel', fn: function () { csv(r.titulo.replace(/\s+/g, '_').toLowerCase() + '_' + hoy() + '.csv', r.csv); return false; } }, { t: 'Copiar para WhatsApp', c: 'wa', fn: function (ov, btn) { copiar(r.texto, btn); return false; } }]), 'lg');
+  return modal(r.titulo, burbuja(r.texto), [{ t: 'Cerrar' }].concat(r.comp ? [{ t: r.compTxt || '🧾 Comprobante', fn: function () { r.comp(); return false; } }] : []).concat([{ t: 'Excel', fn: function () { csv(r.titulo.replace(/\s+/g, '_').toLowerCase() + '_' + hoy() + '.csv', r.csv); return false; } }, { t: 'Copiar para WhatsApp', c: 'wa', fn: function (ov, btn) { copiar(r.texto, btn); return false; } }]), 'lg');
 }
-var TIPOS = [['diario', '📅', 'Diario', 'Propinas del día'], ['semanal', '🗓️', 'Semanal', 'Propinas y caja'], ['mensual', '📆', 'Mensual', 'Totales del mes'], ['anual', '📊', 'Anual', 'Totales del año'], ['entrega', '💵', 'Entrega', 'Quiénes cobraron']];
+var TIPOS = [['paq', '📦', 'Paquetes', 'Por turno o día'], ['diario', '📅', 'Diario', 'Propinas del día'], ['semanal', '🗓️', 'Semanal', 'Propinas y caja'], ['mensual', '📆', 'Mensual', 'Totales del mes'], ['anual', '📊', 'Anual', 'Totales del año'], ['entrega', '💵', 'Entrega', 'Quiénes cobraron']];
 function pReportes() {
   var r = F.rep = F.rep || {};
   r.tipo = r.tipo || 'semanal'; r.f = r.f || hoy(); if (!r.sd) { var x = rango('semanaAnt'); r.sd = x[0]; r.sh = x[1]; } r.mes = r.mes || hoy().slice(0, 7);
@@ -1989,7 +2087,8 @@ function pReportes() {
   $('#view').innerHTML = h;
   $$('[data-t]').forEach(function (d) { d.onclick = function () { r.tipo = d.dataset.t; refrescar(); }; });
   var b = '', sS = null;
-  if (r.tipo === 'diario') b += '<div class="f"><label>Día</label><input type="date" id="rF" value="' + r.f + '"></div>';
+  if (r.tipo === 'diario' || r.tipo === 'paq') b += '<div class="f"><label>Día</label><input type="date" id="rF" value="' + r.f + '"></div>';
+  if (r.tipo === 'paq') { sS = segmento('rTu', [['', 'Todo el día']].concat(TURNOS), r.tu || '', function (v) { r.tu = v; refrescar(); }); b += '<div class="f"><label>Turno</label>' + sS.html + '</div>'; }
   if (r.tipo === 'semanal') b += '<div class="f"><label>Semana</label><div class="chips"><button class="chip" id="w0">Esta semana</button><button class="chip" id="w1">Semana anterior</button></div></div><div class="f"><label>Desde</label><input type="date" id="rSd" value="' + r.sd + '"></div><div class="f"><label>Hasta</label><input type="date" id="rSh" value="' + r.sh + '"></div>';
   if (r.tipo === 'mensual') b += '<div class="f"><label>Mes</label><input type="month" id="rM" value="' + r.mes + '"></div>';
   if (r.tipo === 'anual') b += '<div class="f"><label>Año</label><input type="number" id="rA" min="2020" max="2100" value="' + (r.anio || hoy().slice(0, 4)) + '" style="width:110px"></div>';
@@ -2004,13 +2103,14 @@ function pReportes() {
   if ($('#rDet')) $('#rDet').onchange = function () { r.detalle = this.checked; refrescar(); };
   if ($('#rEn')) $('#rEn').onchange = function () { r.ent = this.value; refrescar(); };
   var rep = generarReporte(r);
-  $('#rPrev').innerHTML = rep ? (rep.vacio ? '<div class="banner warn">No hay propinas cargadas para lo elegido.</div>' : '') + burbuja(rep.texto) : '<div class="empty"><div class="ic">💬</div><b>Todavía no hay nada para mostrar</b></div>';
+  $('#rPrev').innerHTML = rep ? (rep.vacio ? '<div class="banner warn">' + (r.tipo === 'paq' ? 'No hay paquetes para lo elegido.' : 'No hay propinas cargadas para lo elegido.') + '</div>' : '') + burbuja(rep.texto) : '<div class="empty"><div class="ic">💬</div><b>Todavía no hay nada para mostrar</b></div>';
   $('#rCopy').disabled = !rep; $('#rCsv').disabled = !rep;
-  $('#rComp').style.display = rep && rep.comp ? '' : 'none'; $('#rComp').onclick = function () { if (rep && rep.comp) rep.comp(); };
+  $('#rComp').style.display = rep && rep.comp ? '' : 'none'; $('#rComp').textContent = (rep && rep.compTxt) || '🧾 Comprobante'; $('#rComp').onclick = function () { if (rep && rep.comp) rep.comp(); };
   $('#rCopy').onclick = function () { copiar(rep.texto, this); };
   $('#rCsv').onclick = function () { csv(rep.titulo.replace(/\s+/g, '_').toLowerCase() + '_' + hoy() + '.csv', rep.csv); };
 }
 function generarReporte(r) {
+  if (r.tipo === 'paq') return reportePaquetes(r.f, r.tu || '');
   if (r.tipo === 'diario') return reporteDiario({ f: r.f, detalle: r.detalle });
   if (r.tipo === 'semanal') return reportePeriodo({ s: r.s, d: r.sd, h: r.sh, detalle: r.detalle }, 'semanal');
   if (r.tipo === 'mensual') { var d = r.mes + '-01'; return reportePeriodo({ s: r.s, d: d, h: finMes(d), detalle: r.detalle }, 'mensual'); }
@@ -2188,7 +2288,7 @@ $('#fileRestore').onchange = function () {
 var PANT = { playa: pCargar, paquete: pPaquete, paquetes: pPaquetes, inicio: pInicio, cargar: pCargar, entregar: pEntregar, caja: pCaja, reportes: pReportes, historial: pHistorial, empleados: pEmpleados, ajustes: pAjustes };
 window.addEventListener('beforeunload', function (ev) { if (tG) guardarAhora(); if (sucio && sucio()) { ev.preventDefault(); ev.returnValue = ''; } });
 try { var bc = new BroadcastChannel('propinasBeraza'); bc.onmessage = function (ev) { if (ev.data === 'hola') bc.postMessage('ya'); else if (ev.data === 'ya') toast('El sistema ya está abierto en otra pestaña. Usá una sola para no pisar datos.', 'err'); }; bc.postMessage('hola'); } catch (e) { /* sin BroadcastChannel */ }
-window.__propinas = { get D() { return D; }, calc: calc, cajaDe: cajaDe, resumenSector: resumenSector, pendienteHasta: pendienteHasta, diasTrabajados: diasTrabajados, repartir: repartir, desglose: desglose, textoBilletes: textoBilletes, registrarEntrega: registrarEntrega, anularEntrega: anularEntrega, guardarEmpleado: guardarEmpleado, reporteDiario: reporteDiario, reportePeriodo: reportePeriodo, reporteEntrega: reporteEntrega, migrar: migrar, guardarAhora: guardarAhora, ir: ir, filasMovimientos: filasMovimientos, carpeta: function () { return CARP; }, escribirCarpeta: escribirCarpeta, nube: function () { return NUBE; }, subirNube: subirNube, registrarCarga: registrarCarga, registrarPaquete: registrarPaquete, arqueo: arqueo, anularPaquetes: anularPaquetes, csvTexto: csvTexto, unirDocs: unirDocs, turnoYFecha: function () { return turnoYFecha(); }, registrarObsPaquete: registrarObsPaquete, estadoPaq: estadoPaq, totalEfectivo: totalEfectivo, ticketPaquete: ticketPaquete, controlDia: controlDia, paqList: paqList, registrarCorreccion: registrarCorreccion, construirCargas: construirCargas, comprobanteEntrega: comprobanteEntrega, comprobanteDia: comprobanteDia, generarReporte: function (r) { return generarReporte(r); }, playa: function () { return PL; } };
+window.__propinas = { get D() { return D; }, calc: calc, cajaDe: cajaDe, resumenSector: resumenSector, pendienteHasta: pendienteHasta, diasTrabajados: diasTrabajados, repartir: repartir, desglose: desglose, textoBilletes: textoBilletes, registrarEntrega: registrarEntrega, anularEntrega: anularEntrega, guardarEmpleado: guardarEmpleado, reporteDiario: reporteDiario, reportePeriodo: reportePeriodo, reporteEntrega: reporteEntrega, reportePaquetes: reportePaquetes, comprobanteEntrega: comprobanteEntrega, migrar: migrar, guardarAhora: guardarAhora, ir: ir, filasMovimientos: filasMovimientos, carpeta: function () { return CARP; }, escribirCarpeta: escribirCarpeta, nube: function () { return NUBE; }, subirNube: subirNube, registrarCarga: registrarCarga, registrarPaquete: registrarPaquete, arqueo: arqueo, anularPaquetes: anularPaquetes, csvTexto: csvTexto, unirDocs: unirDocs, turnoYFecha: function () { return turnoYFecha(); }, registrarObsPaquete: registrarObsPaquete, estadoPaq: estadoPaq, totalEfectivo: totalEfectivo, ticketPaquete: ticketPaquete, controlDia: controlDia, paqList: paqList, registrarCorreccion: registrarCorreccion, construirCargas: construirCargas, comprobanteEntrega: comprobanteEntrega, comprobanteDia: comprobanteDia, generarReporte: function (r) { return generarReporte(r); }, playa: function () { return PL; } };
 if (/^https?:$/.test(location.protocol)) document.body.classList.add('bloq');
 iniciarAlmacenamiento().then(function () { REV++; pie(); ir('inicio'); return carpetaIniciar().then(function () { pie(); if (ACT === 'inicio' || ACT === 'ajustes') refrescar(); }).then(nubeIniciar).then(function () { document.body.classList.remove('bloq'); menu(); pie(); if (esPlaya()) ir('playa'); else refrescar(); }); }).catch(function (e) { document.body.classList.remove('bloq'); guardadoOK = false; pie(); ir('inicio'); toast('No se pudieron leer los datos guardados: ' + e.message, 'err'); });
 })();
