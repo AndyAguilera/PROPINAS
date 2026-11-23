@@ -32,7 +32,9 @@ function resumenCaja(d) {
   const aj = ((d && d.arqueos) || []).reduce((a, x) => a + (Number(x.c) || 0), 0);
   const ents = ((d && d.entregas) || []).filter(e => !e.anulada);
   const ent = ents.reduce((a, e) => a + (Number(e.total) || 0), 0), u = ents[ents.length - 1];
-  return { base: inicial + aj - ent, inicial, ult: u ? { n: u.n, f: u.f, resto: Number(u.cajaDespues) || 0 } : null };
+  const regs = ((d && d.regalos) || []).filter(r => !r.anulado && r.origen !== 'aparte');
+  const rg = regs.reduce((a, r) => a + (Number(r.c) || 0), 0), reg = regs.filter(r => !u || String(r.cr) >= String(u.cr || '')).reduce((a, r) => a + (Number(r.c) || 0), 0);
+  return { base: inicial + aj - ent - rg, inicial, reg, ult: u ? { n: u.n, f: u.f, resto: Number(u.cajaDespues) || 0 } : null };
 }
 /** Total vigente por fecha de los paquetes: aplica correcciones y anulaciones del administrador. */
 function totalesPorDia(lst) {
@@ -117,7 +119,7 @@ module.exports = async function handler(req, res) {
         if (!cj) { const [d] = await redis([['GET', K.datos]]); cj = resumenCaja(d ? JSON.parse(d) : null); await redis([['SET', K.caja, JSON.stringify(cj)]]); }
         const tt = r[5] || []; let sumTot = 0; for (let i = 1; i < tt.length; i += 2) sumTot += Number(tt[i]) || 0;
         const sumPq = Object.keys(acum).reduce((a, f) => a + (acum[f] || 0), 0);
-        const caja = { saldo: cj.base + sumTot + sumPq, inicial: cj.inicial, ult: cj.ult };
+        const caja = { saldo: cj.base + sumTot + sumPq, inicial: cj.inicial, ult: cj.ult, reg: cj.reg || 0 };
         const desde = new Date(Date.parse(tf.f + 'T12:00:00Z') - 400 * 86400000).toISOString().slice(0, 10);
         Object.keys(acum).forEach(f => { if (f < desde || !acum[f]) delete acum[f]; });
         const lst = (r[1] || []).map(x => JSON.parse(x)), anul = new Set(lst.filter(x => x.t === 'obs' && x.accion === 'anular').map(x => x.ref));
