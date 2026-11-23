@@ -346,7 +346,8 @@ function estadoInicial() {
     entregas: [],   // {id,n,f,s,d,h,monto,redondeo,sobrante,items:[{p,dias,c,manual}],total,dias,cajaAntes,cajaDespues,aut,motivo,nota,cr,anulada,anulMotivo,anulFecha}
     arqueos: [],    // ajustes por arqueo del administrador: {id,f,ts,contado,cajaAntes,c (diferencia, puede ser negativa),motivo,quien}
     paquetes: [],   // paquetes de efectivo armados (NO son pagos): {id,t:'paq',n,f,turno,ts,items:[{p,nombre,c}],total,por,quien} y observaciones {id,t:'obs',ref,...}
-    log: [], seq: { ent: 0, paq: 0 }, meta: { creado: ahora(), cambio: '', backup: '' },
+    regalos: [],    // regalos de cumpleaños: {id,n,f,p,c,origen:'caja'|'aparte',nota,cr,quien,seqEnt,anulado,anulMotivo,anulFecha}
+    log: [], seq: { ent: 0, paq: 0, reg: 0 }, meta: { creado: ahora(), cambio: '', backup: '' },
   };
 }
 var D = estadoInicial();
@@ -354,8 +355,12 @@ var REV = 0;
 
 /* ---------- almacenamiento */
 var LS = 'propinasBeraza.v1', IDB = null, guardadoOK = true;
-function abrirIDB() { return new Promise(function (res) { try { var r = indexedDB.open('propinasBeraza', 1); r.onupgradeneeded = function () { r.result.createObjectStore('estado'); }; r.onsuccess = function () { IDB = r.result; res(); }; r.onerror = function () { res(); }; } catch (e) { res(); } }); }
-function leerIDB() { return new Promise(function (res) { if (!IDB) return res(null); try { var q = IDB.transaction('estado').objectStore('estado').get('D'); q.onsuccess = function () { res(q.result || null); }; q.onerror = function () { res(null); }; } catch (e) { res(null); } }); }
+/** Corta una espera que no termina: después de "ms" sigue con "valor" y anota qué se trabó. */
+var ARR = { paso: 'inicio', lentos: [] };
+function conTiempo(pr, ms, valor, nombre) { return new Promise(function (res) { var listo = false; var t = setTimeout(function () { if (listo) return; listo = true; ARR.lentos.push(nombre); res(valor); }, ms); Promise.resolve(pr).then(function (v) { if (listo) return; listo = true; clearTimeout(t); res(v); }, function () { if (listo) return; listo = true; clearTimeout(t); res(valor); }); }); }
+function abrirIDB() { return conTiempo(new Promise(function (res) { try { var r = indexedDB.open('propinasBeraza', 1), tarde = false; setTimeout(function () { tarde = true; }, 5000); r.onupgradeneeded = function () { r.result.createObjectStore('estado'); }; r.onsuccess = function () { if (!tarde) IDB = r.result; res(); }; r.onerror = function () { res(); }; r.onblocked = function () { res(); }; } catch (e) { res(); } }), 5000, undefined, 'almacenamiento del navegador'); }
+function leerIDB() { return conTiempo(leerIDB0(), 5000, null, 'lectura del navegador'); }
+function leerIDB0() { return new Promise(function (res) { if (!IDB) return res(null); try { var q = IDB.transaction('estado').objectStore('estado').get('D'); q.onsuccess = function () { res(q.result || null); }; q.onerror = function () { res(null); }; } catch (e) { res(null); } }); }
 function escribirIDB(txt) { return new Promise(function (res) { if (!IDB) return res(false); try { var tx = IDB.transaction('estado', 'readwrite'); tx.objectStore('estado').put(txt, 'D'); tx.oncomplete = function () { res(true); }; tx.onerror = function () { res(false); }; } catch (e) { res(false); } }); }
 var tG = null;
 function guardar() { if (esPlaya()) return; REV++; D.meta.cambio = ahora(); clearTimeout(tG); tG = setTimeout(guardarAhora, 150); }
@@ -428,8 +433,9 @@ function normalizar(x) {
   if (x.log.length > 5000) x.log.splice(0, x.log.length - 5000);
   if (!Array.isArray(x.paquetes)) x.paquetes = [];
   if (!Array.isArray(x.arqueos)) x.arqueos = [];
+  if (!Array.isArray(x.regalos)) x.regalos = [];
   x.cargas = construirCargas(x.eventos, x.paquetes);
-  x.seq = x.seq || { ent: 0 }; if (!x.seq.paq) x.seq.paq = x.paquetes.reduce(function (a, q) { return Math.max(a, q.n || 0); }, 0);
+  x.seq = x.seq || { ent: 0 }; if (!x.seq.reg) x.seq.reg = x.regalos.length; if (!x.seq.paq) x.seq.paq = x.paquetes.reduce(function (a, q) { return Math.max(a, q.n || 0); }, 0);
   var fuera = antes.e - x.empleados.length;
   if (fuera || quitadasFull || antes.n - x.entregas.length) notas.push('Se quitó FULL: ' + fuera + ' empleados, ' + quitadasFull + ' propinas, ' + (antes.n - x.entregas.length) + ' entregas');
   if (turnos && sumadas) notas.push('Se pasó a carga por día: ' + sumadas + ' cargas de turnos sumadas en su día');
@@ -462,11 +468,12 @@ function bitacora(a, d) { D.log.push([ahora(), a, d]); if (D.log.length > 5000) 
 var ARCH = { datos: 'Propinas_Beraza_datos.json', mov: 'Registro_movimientos.csv', bit: 'Registro_cambios.csv', resp: 'Respaldos' };
 var CARP = { h: null, estado: 'no', ultimo: '', error: '' }; // no | conectada | permiso | nosoporta
 var soportaCarpeta = typeof window.showDirectoryPicker === 'function';
-function idbGet(k) { return new Promise(function (res) { if (!IDB) return res(null); try { var q = IDB.transaction('estado').objectStore('estado').get(k); q.onsuccess = function () { res(q.result || null); }; q.onerror = function () { res(null); }; } catch (e) { res(null); } }); }
+function idbGet(k) { return conTiempo(idbGet0(k), 5000, null, 'lectura del navegador'); }
+function idbGet0(k) { return new Promise(function (res) { if (!IDB) return res(null); try { var q = IDB.transaction('estado').objectStore('estado').get(k); q.onsuccess = function () { res(q.result || null); }; q.onerror = function () { res(null); }; } catch (e) { res(null); } }); }
 function idbPut(k, v) { return new Promise(function (res) { if (!IDB) return res(false); try { var tx = IDB.transaction('estado', 'readwrite'); tx.objectStore('estado').put(v, k); tx.oncomplete = function () { res(true); }; tx.onerror = function () { res(false); }; } catch (e) { res(false); } }); }
 function idbDel(k) { return new Promise(function (res) { if (!IDB) return res(false); try { var tx = IDB.transaction('estado', 'readwrite'); tx.objectStore('estado').delete(k); tx.oncomplete = function () { res(true); }; tx.onerror = function () { res(false); }; } catch (e) { res(false); } }); }
 function csvTexto(filas) { return '\uFEFF' + filas.map(function (r) { return r.map(function (v) { v = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(v) && !/^-?\d+(,\d+)?$/.test(v)) v = "'" + v; return /[;"\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(';'); }).join('\r\n'); }
-function tieneDatos(x) { return !!((x.eventos || []).length || (x.paquetes || []).length || (x.arqueos || []).length || Object.keys(x.cargas || {}).length || (x.entregas || []).length || Object.keys(x.caja || {}).some(function (k) { return x.caja[k].inicial; })); }
+function tieneDatos(x) { return !!((x.eventos || []).length || (x.regalos || []).length || (x.paquetes || []).length || (x.arqueos || []).length || Object.keys(x.cargas || {}).length || (x.entregas || []).length || Object.keys(x.caja || {}).some(function (k) { return x.caja[k].inicial; })); }
 
 /** Registro legible de toda la plata: saldos iniciales, propinas (con su estado) y entregas por empleado. */
 function filasMovimientos() {
@@ -492,6 +499,7 @@ function filasMovimientos() {
       if (!cs.length) out.push([o.ts, (o.accion === 'ok' ? 'Paquete aprobado' : 'Nota paquete') + ' N° ' + nroPaq(q.n), dmy(q.f), '', '', '', 0, o.accion === 'ok' ? 'Aprobado' : 'Observación', o.texto + ' · ' + o.quien]);
       cs.forEach(function (x) { out.push([o.ts, 'Corrección paquete N° ' + nroPaq(q.n), dmy(q.f), emp(x.p).nombre, emp(x.p).legajo, x.c, x.c - (x.antes || 0), 'Original ' + $m(x.antes || 0) + ' → corregido ' + $m(x.c), o.texto + ' · ' + o.quien]); }); }); });
   (D.arqueos || []).forEach(function (a) { out.push([a.ts, 'Arqueo', dmy(a.f), '', '', a.contado, a.c, a.c === 0 ? 'Sin diferencia' : a.c > 0 ? 'Sobrante' : 'Faltante', 'Sistema ' + $m(a.cajaAntes) + ' · contado ' + $m(a.contado) + ' · ' + a.motivo + ' · ' + a.quien]); });
+  (D.regalos || []).forEach(function (r) { var m = emp(r.p); out.push([r.cr, 'Regalo cumpleaños ' + r.n, dmy(r.f), m.nombre, m.legajo, r.c, r.anulado || r.origen === 'aparte' ? 0 : -r.c, r.anulado ? 'Anulado' : r.origen === 'aparte' ? 'Aporte aparte (no toca la caja)' : 'Sale de la caja', (r.nota ? r.nota + ' · ' : '') + r.quien + (r.anulado ? ' · anulado: ' + r.anulMotivo : '')]); });
   D.entregas.forEach(function (en) {
     en.items.forEach(function (it) {
       var m = emp(it.p);
@@ -593,8 +601,10 @@ function enNube() { return NUBE.rol === 'admin' || NUBE.rol === 'playa'; }
 function api(metodo, q, cuerpo, cred) {
   var h = { 'content-type': 'application/json' }, u = cred ? cred.u : NUBE.usuario, c = cred ? cred.c : NUBE.clave;
   if (c) { h['x-clave'] = encodeURIComponent(c); h['x-usuario'] = u || ''; }
-  return fetch('api/datos' + (q ? '?' + q : ''), { method: metodo, headers: h, body: cuerpo ? JSON.stringify(cuerpo) : undefined, cache: 'no-store' })
-    .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { j._st = r.status; if (j.ahora) { var t = Date.parse(String(j.ahora).replace(' ', 'T') + '-03:00'); if (!isNaN(t)) DESFASE = t - Date.now(); } return j; }); });
+  var ctl = window.AbortController ? new AbortController() : null, tt = ctl ? setTimeout(function () { ctl.abort(); }, 30000) : 0;
+  return fetch('api/datos' + (q ? '?' + q : ''), { method: metodo, headers: h, body: cuerpo ? JSON.stringify(cuerpo) : undefined, cache: 'no-store', signal: ctl ? ctl.signal : undefined })
+    .catch(function (e) { clearTimeout(tt); throw e && e.name === 'AbortError' ? new Error('La nube no respondió a tiempo (failed fetch). Revisá internet y probá de nuevo.') : e; })
+    .then(function (r) { clearTimeout(tt); return r.json().catch(function () { return {}; }).then(function (j) { j._st = r.status; if (j.ahora) { var t = Date.parse(String(j.ahora).replace(' ', 'T') + '-03:00'); if (!isNaN(t)) DESFASE = t - Date.now(); } return j; }); });
 }
 function nubeIniciar() {
   if (!/^https?:$/.test(location.protocol)) return Promise.resolve();
@@ -711,6 +721,11 @@ function unirDocs(base, otro) {
   base.seq.ent = Math.max(base.seq.ent || 0, otro.seq.ent || 0, base.entregas.reduce(function (a, x) { return Math.max(a, parseInt(String(x.n).slice(2), 10) || 0); }, 0));
   base.arqueos = base.arqueos || []; var aq = {}; base.arqueos.forEach(function (a) { aq[a.id] = 1; }); (otro.arqueos || []).forEach(function (a) { if (!aq[a.id]) base.arqueos.push(a); });
   base.arqueos.sort(function (a, b) { return a.ts < b.ts ? -1 : 1; });
+  base.regalos = base.regalos || []; var rg = {}; base.regalos.forEach(function (r) { rg[r.id] = r; });
+  (otro.regalos || []).forEach(function (r) { var b = rg[r.id]; if (!b) { base.regalos.push(r); rg[r.id] = r; } else if (r.anulado && !b.anulado) { b.anulado = true; b.anulMotivo = r.anulMotivo; b.anulFecha = r.anulFecha; } });
+  base.regalos.sort(function (a, b) { return a.cr < b.cr ? -1 : 1; });
+  var vr = {}, mr = 0; base.regalos.forEach(function (r) { mr = Math.max(mr, parseInt(String(r.n).slice(2), 10) || 0); }); base.regalos.forEach(function (r) { if (vr[r.n]) r.n = 'R-' + String(++mr).padStart(4, '0'); vr[r.n] = 1; });
+  base.seq.reg = Math.max(base.seq.reg || 0, (otro.seq && otro.seq.reg) || 0, mr);
   var l = {}; base.log.forEach(function (x) { l[x.join('|')] = 1; }); otro.log.forEach(function (x) { if (!l[x.join('|')]) base.log.push(x); });
   base.log.sort(function (a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; });
   return base;
@@ -817,19 +832,20 @@ function cajaCfg(s) { D.caja = D.caja || {}; return D.caja[s] || (D.caja[s] = { 
 function calc() {
   if (memo.rev === REV) return memo;
   var S = {}, P = {}, pagado = {};
-  function sx(s) { return S[s] || (S[s] = { s: s, inicial: 0, fIni: '', propinas: 0, entregado: 0, ajustes: 0, ajNeg: 0, items: [] }); }
+  function sx(s) { return S[s] || (S[s] = { s: s, inicial: 0, fIni: '', propinas: 0, entregado: 0, ajustes: 0, ajNeg: 0, regalos: 0, items: [] }); }
   function px(p, s) { var k = bucket(p, s); return P[k] || (P[k] = { k: k, p: p, s: s, propinas: 0, cobrado: 0, cargas: [], cobros: [] }); }
   D.config.sectores.forEach(function (s) { var cf = cajaCfg(s.id), x = sx(s.id); x.inicial = cf.inicial || 0; x.fIni = cf.fecha || ''; });
   Object.keys(D.cargas).forEach(function (k) { var c = D.cargas[k]; if (c.an) return; var x = sx(c.s); x.propinas += c.c; x.items.push(c); var e = px(c.p, c.s); e.propinas += c.c; e.cargas.push(c); });
   (D.arqueos || []).forEach(function (a) { var x = sx(SEC); x.ajustes += a.c; if (a.c > 0) x.items.push({ k: 'AJ|' + a.id, f: a.f, c: a.c, cr: a.ts, ini: true, aj: true }); else x.ajNeg -= a.c; });
+  (D.regalos || []).forEach(function (r) { if (!r.anulado && r.origen !== 'aparte') sx(SEC).regalos += r.c; });
   D.entregas.forEach(function (en) { if (en.anulada) return; sx(en.s).entregado += en.total; en.items.forEach(function (it) { var e = px(it.p, en.s); e.cobrado += it.c; e.cobros.push({ en: en, it: it }); }); });
   Object.keys(S).forEach(function (k) {
     var x = S[k];
-    x.caja = x.inicial + x.propinas + x.ajustes - x.entregado;
+    x.caja = x.inicial + x.propinas + x.ajustes - x.entregado - x.regalos;
     var items = x.items.slice();
     if (x.inicial) items.push({ k: 'INI|' + k, f: '0000-00-00', c: x.inicial, cr: '', ini: true });
     items.sort(function (a, b) { return a.f < b.f ? -1 : a.f > b.f ? 1 : ((b.ini ? 1 : 0) - (a.ini ? 1 : 0)) || (a.cr < b.cr ? -1 : 1); });
-    var resto = x.entregado + x.ajNeg; // un faltante del arqueo se descuenta de la plata más vieja, como un pago
+    var resto = x.entregado + x.ajNeg + x.regalos; // un faltante del arqueo se descuenta de la plata más vieja, como un pago
     items.forEach(function (c) { var pg = Math.max(0, Math.min(c.c, resto)); pagado[c.k] = pg; resto -= pg; });
     x.ordenados = items;
   });
@@ -997,14 +1013,16 @@ function guardarEmpleado(o) {
     var alta = esFecha(o.alta) ? o.alta : m.alta, baja = o.activo ? '' : (esFecha(o.baja) ? o.baja : (m.baja || hoy()));
     if (baja && alta && baja < alta) throw new Error('La fecha de egreso no puede ser anterior a la de ingreso.');
     var antes = m.nombre + ' (' + m.s + ', ingreso ' + dmy(m.alta) + ', ' + (m.activo ? 'activo' : 'egreso ' + dmy(m.baja)) + ')';
+    var nacAntes = m.nac || ''; if (o.nac !== undefined) m.nac = esFecha(o.nac) ? o.nac : '';
     m.nombre = nombre; m.legajo = String(o.legajo || '').trim(); m.s = o.s; m.alta = alta; m.baja = baja; m.activo = !!o.activo;
+    if ((m.nac || '') !== nacAntes) bitacora('EMPLEADO', m.nombre + ': cumpleaños ' + (nacAntes ? dm(nacAntes) : '—') + ' → ' + (m.nac ? dm(m.nac) : '—'));
     bitacora('EMPLEADO', 'Modificado: ' + antes + ' → ' + m.nombre + ' (' + m.s + ', ingreso ' + dmy(m.alta) + ', ' + (m.activo ? 'activo' : 'egreso ' + dmy(m.baja)) + ')');
     guardar(); return m;
   }
-  var n = { id: uid('P'), nombre: nombre, legajo: String(o.legajo || '').trim(), s: o.s, activo: true, alta: esFecha(o.alta) ? o.alta : hoy(), baja: '' };
+  var n = { id: uid('P'), nombre: nombre, legajo: String(o.legajo || '').trim(), s: o.s, activo: true, alta: esFecha(o.alta) ? o.alta : hoy(), baja: '', nac: esFecha(o.nac) ? o.nac : '' };
   D.empleados.push(n); bitacora('EMPLEADO', 'Alta: ' + n.nombre + ' (' + n.s + ', ingreso ' + dmy(n.alta) + ')'); guardar(); return n;
 }
-function tieneMovimientos(id) { return Object.keys(D.cargas).some(function (k) { return D.cargas[k].p === id; }) || D.entregas.some(function (en) { return en.items.some(function (i) { return i.p === id; }); }); }
+function tieneMovimientos(id) { return (D.regalos || []).some(function (r) { return r.p === id; }) || Object.keys(D.cargas).some(function (k) { return D.cargas[k].p === id; }) || D.entregas.some(function (en) { return en.items.some(function (i) { return i.p === id; }); }); }
 
 /* ---------- interfaz: avisos, modales, animaciones */
 function toast(msg, tipo) {
@@ -1160,9 +1178,11 @@ function pInicio() {
   if (soloLectura()) h += '<div class="banner info">👁️ <div>Vista de <b>solo lectura</b>: ves lo que carga el administrador. Se actualiza sola cada minuto.</div></div>';
   var pend = paqPendientes();
   if (pend.length) h += '<div class="banner warn">📦 <div><b>' + pend.length + ' paquete' + (pend.length === 1 ? '' : 's') + ' pendiente' + (pend.length === 1 ? '' : 's') + ' de revisar</b> (' + $m(pend.reduce(function (a, q) { return a + totalEfectivo(q); }, 0)) + ', ya sumado a la caja). <button class="btn sm" id="bPend" style="margin-left:8px">Revisar</button></div></div>';
+  var cum = cumplesCerca(7, 7);
+  if (cum.length) h += '<div class="banner info" id="bCumple">🎂 <div><b>Cumpleaños:</b> ' + cum.map(function (z) { return esc(z.m.nombre) + ' ' + cuandoCumple(z) + (z.reg ? ' <span class="pill ok">✓ regalo ' + $m(z.reg.c) + '</span>' : ' <button class="btn sm" data-regalo="' + esc(z.m.id) + '" style="margin-left:4px">🎁 Regalo</button>'); }).join(' &nbsp;·&nbsp; ') + '</div></div>';
   if (!soloLectura() && !x.inicial && !D.entregas.length) h += '<div class="banner info">💰 <div>¿Ya tenés plata de propinas en la caja? <a href="#" id="bIni" style="font-weight:700;color:inherit">Cargá el saldo inicial</a> para que se sume a lo que se reparte.</div></div>';
   h += '<div class="grid g3 stagger">';
-  h += '<div class="card hero"><div class="l">En caja para repartir</div><div class="v" data-cnt="' + x.caja + '">$ 0</div><div class="row"><div><span>Saldo inicial</span><b>' + $m(x.inicial) + '</b></div><div><span>Propinas (paquetes)</span><b>' + $m(x.propinas) + '</b></div>' + (x.ajustes ? '<div><span>Ajustes por arqueo</span><b>' + (x.ajustes > 0 ? '+' : '') + $m(x.ajustes) + '</b></div>' : '') + '<div><span>Ya pagado</span><b>' + $m(x.entregado) + '</b></div></div></div>';
+  h += '<div class="card hero"><div class="l">En caja para repartir</div><div class="v" data-cnt="' + x.caja + '">$ 0</div><div class="row"><div><span>Saldo inicial</span><b>' + $m(x.inicial) + '</b></div><div><span>Propinas (paquetes)</span><b>' + $m(x.propinas) + '</b></div>' + (x.ajustes ? '<div><span>Ajustes por arqueo</span><b>' + (x.ajustes > 0 ? '+' : '') + $m(x.ajustes) + '</b></div>' : '') + '<div><span>Ya pagado</span><b>' + $m(x.entregado) + '</b></div>' + (x.regalos ? '<div><span>Regalos 🎂</span><b>' + $m(x.regalos) + '</b></div>' : '') + '</div></div>';
   h += '<div class="card sect PLAYA"><div class="top"><b>📅 Hoy</b><span class="tiny muted" style="margin-left:auto">' + diaNombre(hoy()) + '</span></div><div class="l">Propinas del día</div><div class="v" data-cnt="' + tHoy + '">$ 0</div>' +
     '<div class="barra"><i data-w="' + (activos ? Math.min(100, Math.round(Object.keys(nHoy).length / activos * 100)) : 0) + '"></i></div><div class="mini"><span><b>' + Object.keys(nHoy).length + '</b> de ' + activos + ' empleados con propina</span></div></div>';
   h += '<div class="card sect PLAYA"><div class="top"><b>🗓️ Esta semana</b><span class="tiny muted" style="margin-left:auto">' + dm(sem[0]) + ' al ' + dm(sem[1]) + '</span></div><div class="l">Propinas de la semana</div><div class="v" data-cnt="' + tSem + '">$ 0</div>' +
@@ -1179,7 +1199,7 @@ function pInicio() {
     (ult.length ? '<ul class="rank">' + ult.map(function (en) { return '<li data-en="' + en.id + '" style="cursor:pointer"><div><b>' + esc(en.n) + '</b>' + (en.anulada ? ' <span class="pill err">Anulada</span>' : '') + '<div class="tiny muted">' + dmy(en.f) + ' · ' + en.items.length + ' empleados' + (en.d || en.h ? ' · ' + esc(textoPeriodo(en.d, en.h)) : '') + '</div></div><b class="num">' + $m(en.total) + '</b></li>'; }).join('') + '</ul>'
       : '<div class="empty"><div class="ic">💵</div><b>Todavía no hiciste pagos</b>Cuando repartas la caja vas a ver acá cada pago.</div>') + '</div></div>';
   $('#view').innerHTML = h;
-  engancharCarpeta($('#view'));
+  engancharCarpeta($('#view')); engancharRegalos($('#view'));
   if ($('#bIni')) $('#bIni').onclick = function (ev) { ev.preventDefault(); ir('caja'); };
   if ($('#bPend')) $('#bPend').onclick = function () { F.pqs = Object.assign(F.pqs || {}, { tab: 'lista', pend: true }); ir('paquetes'); };
   $$('[data-dia]').forEach(function (s) { s.onclick = function () { if (soloLectura()) { F.rep = Object.assign(F.rep || {}, { tipo: 'diario', f: s.dataset.dia }); ir('reportes'); return; } F.rep = Object.assign(F.rep || {}, { tipo: 'diario', f: s.dataset.dia }); ir('reportes'); }; });
@@ -1496,9 +1516,10 @@ function acumPorDia() {
 }
 /** Saldo de la caja de propinas: incluye el saldo inicial y el resto (arrastre) que quedó al repartir. */
 function saldoCaja() {
-  if (esPlaya()) { var c = PL && PL.caja; return c ? { saldo: c.saldo, inicial: c.inicial || 0, ult: c.ult } : { saldo: null }; }
+  if (esPlaya()) { var c = PL && PL.caja; return c ? { saldo: c.saldo, inicial: c.inicial || 0, ult: c.ult, reg: c.reg || 0 } : { saldo: null }; }
   var ents = D.entregas.filter(function (e) { return !e.anulada; }), u = ents[ents.length - 1];
-  return { saldo: cajaDe(SEC), inicial: cajaCfg(SEC).inicial || 0, ult: u ? { n: u.n, f: u.f, resto: u.cajaDespues || 0 } : null };
+  var reg = (D.regalos || []).filter(function (r) { return !r.anulado && r.origen !== 'aparte' && (!u || String(r.cr) >= String(u.cr || '')); }).reduce(function (a, r) { return a + r.c; }, 0);
+  return { saldo: cajaDe(SEC), inicial: cajaCfg(SEC).inicial || 0, ult: u ? { n: u.n, f: u.f, resto: u.cajaDespues || 0 } : null, reg: reg };
 }
 function cardAcumulado() {
   var A = acumPorDia(), hoyT = turnoYFecha().f, sem = [], mes = [];
@@ -1512,11 +1533,12 @@ function cardAcumulado() {
       return '<tr' + (x.cur ? ' style="background:var(--line2)"' : '') + '><td style="width:52%">' + esc(x.t) + (x.cur ? ' <span class="pill">en curso</span>' : '') + '<div class="barra PLAYA" style="margin-top:6px;height:5px"><i style="width:' + Math.round(x.c / mx * 100) + '%"></i></div></td><td class="num b">' + $m(x.c) + '</td></tr>';
     }).join('') + '</tbody></table></div>';
   }
-  var C = saldoCaja(), dsd = C.ult ? C.ult.resto : C.inicial, nuevo = C.saldo - dsd;
+  var C = saldoCaja(), dsd = C.ult ? C.ult.resto : C.inicial, reg = C.reg || 0, nuevo = C.saldo - dsd + reg;
   var cajaH = C.saldo == null ? '' : '<div id="qSaldo" style="display:flex;flex-wrap:wrap;gap:14px 34px;align-items:flex-end;padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--line2)">' +
     '<div><div class="tiny muted" style="font-weight:700;letter-spacing:.4px">💰 SALDO EN CAJA PARA REPARTIR</div><div style="font-size:30px;font-weight:800;font-variant-numeric:tabular-nums" data-saldo="' + C.saldo + '">' + $m(C.saldo) + '</div></div>' +
     '<div><div class="tiny muted">' + (C.ult ? 'Resto que quedó de la última entrega (N° ' + esc(C.ult.n) + ' del ' + dmy(C.ult.f) + ')' : 'Saldo inicial') + '</div><b style="font-size:17px" data-arrastre="' + dsd + '">' + $m(dsd) + '</b></div>' +
-    '<div style="font-size:20px;color:var(--muted)">+</div><div><div class="tiny muted">' + (C.ult ? 'Propinas desde la última entrega' : 'Propinas cargadas') + '</div><b style="font-size:17px">' + $m(nuevo) + '</b></div></div>';
+    '<div style="font-size:20px;color:var(--muted)">+</div><div><div class="tiny muted">' + (C.ult ? 'Propinas desde la última entrega' : 'Propinas cargadas') + '</div><b style="font-size:17px">' + $m(nuevo) + '</b></div>' +
+    (reg ? '<div style="font-size:20px;color:var(--muted)">−</div><div><div class="tiny muted">🎂 Regalos de cumpleaños</div><b style="font-size:17px" data-regalos="' + reg + '">' + $m(reg) + '</b></div>' : '') + '</div>';
   return '<div class="card mt" id="qAcum"><div class="hd"><h3>📈 Acumulado de propinas</h3><span class="r tiny muted">Se ajusta si administración corrige o anula un paquete</span></div><div class="bd">' + cajaH +
     '<div class="tiny muted" style="margin:0 0 10px">Propinas que entraron en cada semana y mes (total de los paquetes):</div><div class="grid g2">' +
     tabla('POR SEMANA (LUNES A DOMINGO)', sem) + tabla('POR MES', mes) + '</div></div></div>';
@@ -1885,6 +1907,115 @@ function pEntregar() {
   };
 }
 
+/* ===================================================================== REGALOS DE CUMPLEAÑOS
+ * El administrador separa un monto en efectivo para el cumpleaños de cada empleado.
+ * Por defecto sale de la caja de propinas; también puede ser un aporte aparte que no toca la caja. Nada se borra: se anula con motivo. */
+function cumpleEn(m, anio) { if (!m || !m.nac) return ''; var md = m.nac.slice(5); if (md === '02-29' && new Date(anio, 1, 29).getMonth() !== 1) md = '02-28'; return anio + '-' + md; }
+/** Días que faltan para el próximo cumpleaños (0 = hoy). */
+function diasHastaCumple(m) { if (!m || !m.nac) return null; var h = hoy(), c = cumpleEn(m, Number(h.slice(0, 4))); if (c < h) c = cumpleEn(m, Number(h.slice(0, 4)) + 1); return Math.round((dI(c) - dI(h)) / 86400000); }
+/** Cumpleaños del ciclo actual (el de este año) y si ya tiene regalo. */
+function cumpleActual(m) { var c = cumpleEn(m, Number(hoy().slice(0, 4))); return { f: c, dif: Math.round((dI(c) - dI(hoy())) / 86400000) }; }
+function regaloDe(p, fCumple) { var d = addD(fCumple, -45), h = addD(fCumple, 60); return (D.regalos || []).filter(function (r) { return r.p === p && !r.anulado && r.f >= d && r.f <= h; })[0] || null; }
+function cumplesCerca(antes, despues) {
+  return D.empleados.filter(function (m) { return m.activo && m.nac; }).map(function (m) { var c = cumpleActual(m); if (c.dif < -antes) { var prox = cumpleEn(m, Number(hoy().slice(0, 4)) + 1); c = { f: prox, dif: Math.round((dI(prox) - dI(hoy())) / 86400000) }; } return { m: m, f: c.f, dif: c.dif, reg: regaloDe(m.id, c.f) }; })
+    .filter(function (x) { return x.dif >= -antes && x.dif <= despues; }).sort(function (a, b) { return a.dif - b.dif; });
+}
+function cuandoCumple(x) { return x.dif === 0 ? '<b>¡hoy!</b>' : x.dif === 1 ? 'mañana' : x.dif === -1 ? 'fue ayer' : x.dif < 0 ? 'fue el ' + DIAS[dI(x.f).getDay()].slice(0, 3).toLowerCase() + ' ' + dm(x.f) : 'el ' + DIAS[dI(x.f).getDay()].slice(0, 3).toLowerCase() + ' ' + dm(x.f); }
+function registrarRegalo(o) {
+  var m = D.empleados.find(function (x) { return x.id === o.p; }); if (!m) throw new Error('Elegí el empleado.');
+  if (!(o.c > 0) || Math.round(o.c) !== o.c) throw new Error('Ingresá el monto del regalo.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(o.f || '')) throw new Error('Fecha inválida.');
+  D.seq.reg = (D.seq.reg || 0) + 1;
+  var r = { id: uid('RG'), n: 'R-' + String(D.seq.reg).padStart(4, '0'), f: o.f, p: m.id, c: o.c, origen: o.origen === 'aparte' ? 'aparte' : 'caja', nota: String(o.nota || '').trim(), cr: ahora(), quien: adminNombre(), seqEnt: D.seq.ent || 0, anulado: false };
+  var caja = cajaDe(SEC);
+  D.regalos = D.regalos || []; D.regalos.push(r);
+  bitacora('REGALO CUMPLEAÑOS', r.n + ' · ' + m.nombre + ' · ' + $m(r.c) + ' · ' + (r.origen === 'caja' ? 'sale de la caja (' + $m(caja) + ' → ' + $m(caja - r.c) + ')' : 'aporte aparte, no toca la caja') + (r.nota ? ' · ' + r.nota : ''));
+  guardar(); return r;
+}
+function anularRegalo(id, motivo) {
+  var r = (D.regalos || []).find(function (x) { return x.id === id; });
+  if (!r || r.anulado) throw new Error('El regalo no existe o ya está anulado.');
+  if (String(motivo || '').trim().length < 5) throw new Error('Indicá el motivo de la anulación (al menos 5 letras).');
+  r.anulado = true; r.anulMotivo = motivo.trim(); r.anulFecha = ahora();
+  bitacora('ANULAR REGALO', r.n + ' · ' + emp(r.p).nombre + ' · ' + $m(r.c) + (r.origen === 'caja' ? ' · vuelve a la caja' : '') + ' · ' + r.anulMotivo); guardar();
+}
+function ventanaRegalo(p) {
+  var act = D.empleados.filter(function (m) { return m.activo; }).sort(porNombre);
+  if (!act.length) { toast('No hay empleados activos.', 'err'); return; }
+  var ult = (D.regalos || []).filter(function (r) { return !r.anulado; }).slice(-1)[0], monto = ult ? ult.c : 4000000, caja = cajaDe(SEC);
+  var html = '<div class="form"><div class="f full"><label>Empleado</label><select id="rgP">' + opts(act.map(function (m) { return [m.id, m.nombre + (m.nac ? ' · 🎂 ' + dm(m.nac) : '')]; }), p || act[0].id) + '</select></div>' +
+    '<div class="f"><label>Monto del regalo</label><input id="rgC" inputmode="decimal" value="' + miles(monto) + '" style="text-align:right;font-weight:800;font-size:20px"></div>' +
+    '<div class="f"><label>Montos rápidos</label><div class="chips">' + [4000000, 5000000, 6000000].map(function (v) { return '<button class="chip" type="button" data-rgv="' + v + '">' + $m(v) + '</button>'; }).join('') + '</div></div>' +
+    '<div class="f"><label>Fecha</label><input type="date" id="rgF" value="' + hoy() + '"></div>' +
+    '<div class="f"><label>¿De dónde sale la plata?</label><select id="rgO">' + opts([['caja', 'De la caja de propinas'], ['aparte', 'Lo pongo aparte (no toca la caja)']], 'caja') + '</select></div>' +
+    '<div class="f full"><label>Nota (opcional)</label><input id="rgN" placeholder="Ej. Regalo de parte de todos"></div></div>' +
+    '<div id="rgInfo" class="small mt"></div>';
+  modal('🎂 Regalo de cumpleaños', html, [{ t: 'Cancelar' }, { t: '🎁 Registrar regalo', c: 'pri', fn: function (ov) {
+    var c = parseAR($('#rgC', ov).value);
+    var r = registrarRegalo({ p: $('#rgP', ov).value, c: c, f: $('#rgF', ov).value, origen: $('#rgO', ov).value, nota: $('#rgN', ov).value });
+    festejar('Regalo ' + r.n + ' registrado');
+    setTimeout(function () { refrescar(); verReporte(reporteRegalo(r)); }, 900);
+  } }], 'lg');
+  function info() {
+    var ovs = document.querySelectorAll('.ov'), ov = ovs[ovs.length - 1]; if (!ov || !$('#rgInfo', ov)) return;
+    var c = parseAR($('#rgC', ov).value), m = emp($('#rgP', ov).value), o = $('#rgO', ov).value, ya = m.nac ? regaloDe(m.id, cumpleActual(m).f) : null, t = [];
+    if (!m.nac) t.push('ℹ️ ' + esc(m.nombre) + ' no tiene cargada la fecha de nacimiento (se puede cargar en Empleados).');
+    else t.push('🎂 Cumple el ' + dm(m.nac) + ' (' + cuandoCumple(cumpleActual(m).dif < -45 ? { f: cumpleEn(m, Number(hoy().slice(0, 4)) + 1), dif: diasHastaCumple(m) } : cumpleActual(m)) + ').');
+    if (ya) t.push('<span style="color:#b45309">⚠️ Ya tiene el regalo ' + esc(ya.n) + ' de ' + $m(ya.c) + ' del ' + dmy(ya.f) + '.</span>');
+    if (o === 'caja' && c > 0) t.push('💰 Caja de propinas: ' + $m(caja) + ' → <b>' + $m(caja - c) + '</b>' + (c > caja ? ' <span style="color:var(--err)">(no alcanza: la caja queda en negativo)</span>' : ''));
+    if (o === 'aparte') t.push('💵 Aporte aparte: queda registrado y se imprime el talón, pero la caja de propinas no cambia.');
+    $('#rgInfo', ov).innerHTML = t.join('<br>');
+  }
+  setTimeout(function () {
+    var ovs = document.querySelectorAll('.ov'), ov = ovs[ovs.length - 1]; if (!ov || !$('#rgC', ov)) return;
+    ['#rgC', '#rgP', '#rgO'].forEach(function (k) { $(k, ov).addEventListener('input', info); $(k, ov).addEventListener('change', info); });
+    $('#rgC', ov).onblur = function () { var v = parseAR(this.value); if (v !== null && !isNaN(v)) this.value = miles(v); };
+    $$('[data-rgv]', ov).forEach(function (b) { b.onclick = function () { $('#rgC', ov).value = miles(Number(b.dataset.rgv)); info(); }; });
+    info();
+  }, 0);
+}
+function verAnularRegalo(id) {
+  var r = (D.regalos || []).find(function (x) { return x.id === id; }); if (!r) return;
+  modal('Anular regalo ' + r.n, '<p class="small muted" style="margin-top:0">' + esc(emp(r.p).nombre) + ' · ' + $m(r.c) + ' del ' + dmy(r.f) + '. ' + (r.origen === 'caja' ? 'La plata <b>vuelve a la caja</b> de propinas.' : 'Era un aporte aparte: la caja no cambia.') + ' No se borra: queda anulado con el motivo.</p><div class="f"><label>Motivo (obligatorio)</label><input id="arM" placeholder="Ej. Se cargó dos veces"></div>',
+    [{ t: 'Cancelar' }, { t: 'Anular', c: 'dan s', fn: function (ov) { anularRegalo(id, $('#arM', ov).value); toast('Regalo anulado.', 'ok'); refrescar(); } }]);
+}
+function reporteRegalo(r) {
+  var m = emp(r.p), L = ['🎂 REGALO DE CUMPLEAÑOS · ' + r.n, cabEmpresa() + ' · ⛽ PLAYA', '', '👤 ' + m.nombre + (m.nac ? ' (cumple el ' + dm(m.nac) + ')' : ''), '🎁 ' + $w(r.c), '📅 ' + dmy(r.f), r.origen === 'caja' ? '💰 Sale de la caja de propinas' : '💵 Aporte aparte (no sale de la caja de propinas)'];
+  if (r.nota) L.push('📝 ' + r.nota);
+  if (r.anulado) L.push('❌ ANULADO: ' + r.anulMotivo);
+  L.push('', '¡Feliz cumpleaños! 🎉');
+  return { titulo: 'Regalo de cumpleaños', compTxt: '🖨️ Imprimir talón', comp: function () { talonRegalo(r); }, texto: L.join('\n'),
+    csv: [['N°', 'Fecha', 'Empleado', 'Legajo', 'Importe', 'Origen', 'Estado', 'Nota']].concat([[r.n, dmy(r.f), m.nombre, m.legajo || '', csvNum(r.c), r.origen === 'caja' ? 'Caja de propinas' : 'Aparte', r.anulado ? 'Anulado' : 'Vigente', r.nota]]) };
+}
+function talonRegalo(r) {
+  var m = emp(r.p), e = D.config.empresa;
+  var h = cabComprobante('Regalo de cumpleaños', [['N°', r.n], ['Fecha', dmy(r.f)], ['Origen', r.origen === 'caja' ? 'Caja de propinas' : 'Aporte aparte']]) +
+    (r.anulado ? '<p style="color:#b91c1c;font-weight:700">REGALO ANULADO el ' + esc(dmy(r.anulFecha)) + ': ' + esc(r.anulMotivo) + '</p>' : '') +
+    '<table><thead><tr><th>Empleado</th><th>Legajo</th><th>Cumpleaños</th><th>Importe</th><th>Firma</th></tr></thead><tbody><tr><td>' + esc(m.nombre) + '</td><td>' + esc(m.legajo || '') + '</td><td>' + (m.nac ? dm(m.nac) : '—') + '</td><td class="n">' + $m(r.c) + '</td><td class="f"></td></tr></tbody></table>' +
+    (r.nota ? '<p>Nota: ' + esc(r.nota) + '</p>' : '') + '<div class="firmas"><div>Entregó: ' + esc(r.quien) + '</div><div>Recibí conforme</div></div>' +
+    '<p class="small" style="margin:26px 0 6px">✂ Talón para abrochar al efectivo (recortar por la línea punteada)</p><div class="tals" style="grid-template-columns:1fr 1fr"><div class="tal"><div class="t1"><span>🎂 Regalo de cumpleaños · ' + esc(e.nombre) + '</span><span>' + esc(r.n) + '</span></div>' +
+    '<div><div class="nom">' + esc(m.nombre) + '</div><div class="leg">¡Feliz cumpleaños!' + (m.nac ? ' · ' + dm(m.nac) : '') + '</div></div><div class="imp">' + $m(r.c) + '</div><div class="pi"><span>Fecha: ' + dmy(r.f) + '</span><span>' + (r.origen === 'caja' ? 'Caja de propinas' : 'Aporte aparte') + '</span></div></div></div>';
+  return imprimir('Regalo ' + r.n, h);
+}
+/** Cuadro de regalos para la pantalla Caja. */
+function cardRegalos() {
+  var l = (D.regalos || []).slice().reverse(), anio = hoy().slice(0, 4), tA = l.filter(function (r) { return !r.anulado && r.f.slice(0, 4) === anio; }).reduce(function (a, r) { return a + r.c; }, 0);
+  var cerca = cumplesCerca(3, 30), sinFecha = D.empleados.filter(function (m) { return m.activo && !m.nac; }).length;
+  return '<div class="card" style="margin-bottom:18px" id="cRegalos"><div class="hd"><h3>🎂 Regalos de cumpleaños</h3><span class="r"><span class="tiny muted">En ' + anio + ': ' + $m(tA) + '</span><button class="btn sm pri" data-regalo="">🎁 Registrar regalo</button></span></div><div class="bd">' +
+    (cerca.length ? '<div class="small" style="margin-bottom:12px"><b>Próximos cumpleaños:</b> ' + cerca.map(function (x) { return esc(x.m.nombre) + ' (' + cuandoCumple(x) + (x.reg ? ' · ✓ ' + $m(x.reg.c) : '') + ')'; }).join(' · ') + '</div>' : '') +
+    (sinFecha ? '<div class="tiny muted" style="margin-bottom:10px">' + sinFecha + ' empleado' + (sinFecha === 1 ? '' : 's') + ' activo' + (sinFecha === 1 ? '' : 's') + ' sin fecha de nacimiento: cargala en <a href="#" data-go="empleados">Empleados</a> para que avise.</div>' : '') +
+    (l.length ? '<div class="tw"><table class="t"><thead><tr><th>N°</th><th>Fecha</th><th>Empleado</th><th>Origen</th><th class="num">Importe</th><th></th></tr></thead><tbody>' + l.slice(0, 12).map(function (r) {
+      return '<tr' + (r.anulado ? ' style="opacity:.55"' : '') + '><td class="b">' + (r.anulado ? '<s>' + esc(r.n) + '</s>' : esc(r.n)) + '</td><td>' + dmy(r.f) + '</td><td>' + esc(emp(r.p).nombre) + (r.nota ? '<div class="tiny muted">' + esc(r.nota) + '</div>' : '') + '</td><td class="small">' + (r.anulado ? '<span class="pill">Anulado</span>' : r.origen === 'caja' ? 'Caja de propinas' : 'Aparte') + '</td><td class="num b">' + $m(r.c) + '</td>' +
+        '<td style="text-align:right;white-space:nowrap"><button class="btn sm" data-regver="' + esc(r.id) + '">🧾</button>' + (r.anulado ? '' : ' <button class="btn sm dan" data-reganu="' + esc(r.id) + '">Anular</button>') + '</td></tr>';
+    }).join('') + '</tbody></table></div>' : '<div class="small muted">Todavía no registraste regalos.</div>') + '</div></div>';
+}
+function engancharRegalos(root) {
+  $$('[data-regalo]', root).forEach(function (b) { b.onclick = function (ev) { ev.preventDefault(); ventanaRegalo(b.dataset.regalo || ''); }; });
+  $$('[data-regver]', root).forEach(function (b) { b.onclick = function () { verReporte(reporteRegalo((D.regalos || []).find(function (r) { return r.id === b.dataset.regver; }))); }; });
+  $$('[data-reganu]', root).forEach(function (b) { b.onclick = function () { verAnularRegalo(b.dataset.reganu); }; });
+  $$('#cRegalos [data-go]', root).forEach(function (a) { a.onclick = function (ev) { ev.preventDefault(); ir(a.dataset.go); }; });
+}
+
 /* ===================================================================== CAJA */
 function pCaja() {
   var f = F.caja = F.caja || {};
@@ -1897,13 +2028,14 @@ function pCaja() {
     var x = S[s.id] || { inicial: 0, fIni: '', propinas: 0, entregado: 0, caja: 0 }, ing = x.inicial + x.propinas;
     return '<div class="card sect ' + s.id + '"><div class="top"><b>💰 Caja de Playa</b><button class="btn sm pri" style="margin-left:auto" id="kArq">⚖️ Arqueo</button><button class="btn sm" data-ini="' + s.id + '">' + (x.inicial ? 'Editar saldo inicial' : '+ Cargar saldo inicial') + '</button></div>' +
       '<div class="l">En caja</div><div class="v' + (x.caja < 0 ? ' neg' : '') + '" data-cnt="' + x.caja + '">$ 0</div><div class="barra"><i data-w="' + (ing > 0 ? Math.min(100, Math.round(x.entregado / ing * 100)) : 0) + '"></i></div>' +
-      '<div class="mini" style="flex-wrap:wrap"><span>Saldo inicial <b>' + $m(x.inicial) + '</b>' + (x.fIni ? ' <span class="tiny">(' + dmy(x.fIni) + ')</span>' : '') + '</span><span>+ Propinas <b>' + $m(x.propinas) + '</b></span><span>− Pagado <b>' + $m(x.entregado) + '</b></span>' + ((D.arqueos || []).length ? '<span>' + (x.ajustes >= 0 ? '+' : '−') + ' Arqueos <b>' + $m(Math.abs(x.ajustes)) + '</b> <a href="#" data-arqs style="font-size:12px">ver</a></span>' : '') + '</div></div>';
+      '<div class="mini" style="flex-wrap:wrap"><span>Saldo inicial <b>' + $m(x.inicial) + '</b>' + (x.fIni ? ' <span class="tiny">(' + dmy(x.fIni) + ')</span>' : '') + '</span><span>+ Propinas <b>' + $m(x.propinas) + '</b></span><span>− Pagado <b>' + $m(x.entregado) + '</b></span>' + (x.regalos ? '<span>− Regalos 🎂 <b>' + $m(x.regalos) + '</b></span>' : '') + ((D.arqueos || []).length ? '<span>' + (x.ajustes >= 0 ? '+' : '−') + ' Arqueos <b>' + $m(Math.abs(x.ajustes)) + '</b> <a href="#" data-arqs style="font-size:12px">ver</a></span>' : '') + '</div></div>';
   }).join('') +
     '<div class="card sect PLAYA"><div class="top"><b>🪙 Sobrante del último pago</b></div><div class="l">Quedó en la caja por redondear a billetes</div><div class="v" data-cnt="' + (ultE ? ultE.sobrante || 0 : 0) + '">$ 0</div>' +
     '<div class="mini" style="flex-wrap:wrap"><span>' + vig.length + ' entrega' + (vig.length === 1 ? '' : 's') + '</span>' + (ultE ? '<span>Última: <b>' + esc(ultE.n) + '</b> ' + dmy(ultE.f) + (ultE.sobrante ? ' · sobró ' + $m(ultE.sobrante) : '') + '</span>' : '') + '<span class="tiny">Ya está incluido en “En caja” y se reparte en el próximo pago.</span></div></div></div>';
+  h += cardRegalos();
   var cp = chipsPeriodo(f, refrescar, true);
   h += '<div class="bar">' + cp.html + '<div class="f grow"><label>Buscar</label><input id="kQ" placeholder="Nombre del empleado" value="' + esc(f.q || '') + '"></div></div><div id="kBody"></div>';
-  $('#view').innerHTML = h; cp.enganchar();
+  $('#view').innerHTML = h; cp.enganchar(); engancharRegalos($('#view'));
   $$('[data-ini]').forEach(function (b) { b.onclick = function () { editarSaldoInicial(b.dataset.ini); }; });
   if ($('#kArq')) $('#kArq').onclick = arqueo;
   $$('[data-arqs]').forEach(function (b) { b.onclick = verArqueos; });
@@ -2019,6 +2151,8 @@ function reportePeriodo(o, tipo) {
     B.push(LINEA, '💰 TOTAL: ' + $w(r.hizo), '💵 ENTREGADO: ' + $w(r.pagado), '📌 PENDIENTE: ' + $w(r.pend));
     var ajP = (D.arqueos || []).filter(function (a) { return a.c && enRango(a.f, o.d, o.h); }).reduce(function (a, x) { return a + x.c; }, 0);
     if (ajP) B.push('⚖️ AJUSTE POR ARQUEO: ' + (ajP > 0 ? '+' : '') + $w(ajP));
+    var rgP = (D.regalos || []).filter(function (x) { return !x.anulado && x.origen !== 'aparte' && enRango(x.f, o.d, o.h); });
+    if (rgP.length) B.push('🎂 REGALOS DE CUMPLEAÑOS: ' + $w(rgP.reduce(function (a, x) { return a + x.c; }, 0)) + ' (' + rgP.map(function (x) { return emp(x.p).nombre; }).join(', ') + ')');
     if (r.pendAntes > 0) B.push('🔁 Saldo anterior en caja: ' + $w(r.pendAntes), '🧾 TOTAL A REPARTIR: ' + $w(r.pend + r.pendAntes));
     bloques.push(B.join('\n'));
     G.hizo += r.hizo; G.pag += r.pagado; G.pend += r.pend; G.antes += r.pendAntes; GS[s] = r;
@@ -2231,9 +2365,9 @@ function pEmpleados() {
   function tabla() {
     var q = String(f.q || '').toLowerCase(), P = calc().P;
     var l = D.empleados.filter(function (m) { return (!f.s || m.s === f.s) && (f.est === 'todos' || (f.est === 'activos') === m.activo) && (!q || m.nombre.toLowerCase().indexOf(q) >= 0 || String(m.legajo) === q); }).sort(function (a, b) { return a.s.localeCompare(b.s) || porNombre(a, b); });
-    $('#eBody').innerHTML = '<div class="card"><div class="bd p0 tw maxh"><table class="t"><thead><tr><th>Empleado</th><th>Legajo</th><th>Ingreso</th><th>Estado</th><th class="num">Cobró en total</th><th></th></tr></thead><tbody class="stagger">' +
-      (l.length ? l.map(function (m) { var e = P[bucket(m.id, m.s)] || { cobrado: 0 }; return '<tr><td>' + persona(m, '') + '</td><td class="small">' + esc(m.legajo || '—') + '</td><td class="small">' + dmy(m.alta) + '</td><td>' + (m.activo ? '<span class="pill ok">Activo</span>' : '<span class="pill">Egreso ' + dmy(m.baja) + '</span>') + '</td><td class="num">' + $m(e.cobrado) + '</td><td style="white-space:nowrap;text-align:right"><button class="btn sm" data-ed="' + m.id + '">Editar</button> <button class="btn sm ' + (m.activo ? 'dan' : '') + '" data-ac="' + m.id + '">' + (m.activo ? 'Dar de baja' : 'Reactivar') + '</button></td></tr>'; }).join('')
-        : '<tr><td colspan="6"><div class="empty"><div class="ic">👥</div><b>No hay empleados con estos filtros</b></div></td></tr>') + '</tbody></table></div></div>';
+    $('#eBody').innerHTML = '<div class="card"><div class="bd p0 tw maxh"><table class="t"><thead><tr><th>Empleado</th><th>Legajo</th><th>Ingreso</th><th>Cumpleaños</th><th>Estado</th><th class="num">Cobró en total</th><th></th></tr></thead><tbody class="stagger">' +
+      (l.length ? l.map(function (m) { var e = P[bucket(m.id, m.s)] || { cobrado: 0 }; return '<tr><td>' + persona(m, '') + '</td><td class="small">' + esc(m.legajo || '—') + '</td><td class="small">' + dmy(m.alta) + '</td><td class="small">' + (m.nac ? '🎂 ' + dm(m.nac) + (diasHastaCumple(m) === 0 ? ' <span class="pill ok">¡hoy!</span>' : '') : '<span class="muted">—</span>') + '</td><td>' + (m.activo ? '<span class="pill ok">Activo</span>' : '<span class="pill">Egreso ' + dmy(m.baja) + '</span>') + '</td><td class="num">' + $m(e.cobrado) + '</td><td style="white-space:nowrap;text-align:right"><button class="btn sm" data-ed="' + m.id + '">Editar</button> <button class="btn sm ' + (m.activo ? 'dan' : '') + '" data-ac="' + m.id + '">' + (m.activo ? 'Dar de baja' : 'Reactivar') + '</button></td></tr>'; }).join('')
+        : '<tr><td colspan="7"><div class="empty"><div class="ic">👥</div><b>No hay empleados con estos filtros</b></div></td></tr>') + '</tbody></table></div></div>';
     stagger($('#eBody'));
     $$('[data-ed]').forEach(function (b) { b.onclick = function () { formEmpleado(D.empleados.find(function (m) { return m.id === b.dataset.ed; })); }; });
     $$('[data-ac]').forEach(function (b) {
@@ -2253,13 +2387,14 @@ function formEmpleado(m) {
   var tiene = !nuevo && tieneMovimientos(m.id);
   var html = '<div class="form"><div class="f full"><label>Nombre y apellido</label><input id="fN" value="' + esc(m.nombre) + '"></div><div class="f"><label>Legajo (opcional)</label><input id="fL" value="' + esc(m.legajo || '') + '"></div>' +
     '<div class="f"><label>Fecha de ingreso</label><input type="date" id="fI" value="' + esc(m.alta || hoy()) + '"></div>' +
+    '<div class="f"><label>🎂 Fecha de nacimiento (para el regalo)</label><input type="date" id="fC" value="' + esc(m.nac || '') + '" max="' + hoy() + '"></div>' +
     (nuevo ? '' : '<div class="f"><label>Estado</label><select id="fA">' + opts([['1', 'Activo'], ['0', 'De baja']], m.activo ? '1' : '0') + '</select></div><div class="f" id="fBw"><label>Fecha de egreso</label><input type="date" id="fB" value="' + esc(m.baja || hoy()) + '"></div>') + '</div>' +
     '';
   var b = [{ t: 'Cancelar' }];
   if (!nuevo && !tiene) b.push({ t: 'Eliminar', c: 'dan', fn: function () { D.empleados = D.empleados.filter(function (x) { return x.id !== m.id; }); bitacora('EMPLEADO', 'Eliminado (sin movimientos): ' + m.nombre); guardar(); toast('Empleado eliminado.', 'ok'); refrescar(); } });
   b.push({ t: 'Guardar', c: 'pri', fn: function (ov) {
     var activo = nuevo ? true : $('#fA', ov).value === '1';
-    guardarEmpleado({ id: nuevo ? '' : m.id, nombre: $('#fN', ov).value, legajo: $('#fL', ov).value, s: SEC, alta: $('#fI', ov).value, activo: activo, baja: activo ? '' : $('#fB', ov).value });
+    guardarEmpleado({ id: nuevo ? '' : m.id, nombre: $('#fN', ov).value, legajo: $('#fL', ov).value, s: SEC, alta: $('#fI', ov).value, nac: $('#fC', ov).value, activo: activo, baja: activo ? '' : $('#fB', ov).value });
     toast('Empleado guardado.', 'ok'); refrescar();
   } });
   var pr = modal(nuevo ? 'Nuevo empleado' : 'Editar empleado', html, b);
@@ -2328,9 +2463,26 @@ $('#fileRestore').onchange = function () {
 var PANT = { playa: pCargar, paquete: pPaquete, paquetes: pPaquetes, inicio: pInicio, cargar: pCargar, entregar: pEntregar, caja: pCaja, reportes: pReportes, historial: pHistorial, empleados: pEmpleados, ajustes: pAjustes };
 window.addEventListener('beforeunload', function (ev) { if (tG) guardarAhora(); if (sucio && sucio()) { ev.preventDefault(); ev.returnValue = ''; } });
 try { var bc = new BroadcastChannel('propinasBeraza'); bc.onmessage = function (ev) { if (ev.data === 'hola') bc.postMessage('ya'); else if (ev.data === 'ya') toast('El sistema ya está abierto en otra pestaña. Usá una sola para no pisar datos.', 'err'); }; bc.postMessage('hola'); } catch (e) { /* sin BroadcastChannel */ }
-window.__propinas = { get D() { return D; }, calc: calc, cajaDe: cajaDe, resumenSector: resumenSector, pendienteHasta: pendienteHasta, diasTrabajados: diasTrabajados, repartir: repartir, desglose: desglose, textoBilletes: textoBilletes, registrarEntrega: registrarEntrega, anularEntrega: anularEntrega, guardarEmpleado: guardarEmpleado, reporteDiario: reporteDiario, reportePeriodo: reportePeriodo, reporteEntrega: reporteEntrega, reportePaquetes: reportePaquetes, comprobanteEntrega: comprobanteEntrega, migrar: migrar, guardarAhora: guardarAhora, ir: ir, filasMovimientos: filasMovimientos, carpeta: function () { return CARP; }, escribirCarpeta: escribirCarpeta, nube: function () { return NUBE; }, subirNube: subirNube, registrarCarga: registrarCarga, registrarPaquete: registrarPaquete, arqueo: arqueo, anularPaquetes: anularPaquetes, csvTexto: csvTexto, unirDocs: unirDocs, turnoYFecha: function () { return turnoYFecha(); }, registrarObsPaquete: registrarObsPaquete, estadoPaq: estadoPaq, totalEfectivo: totalEfectivo, ticketPaquete: ticketPaquete, controlDia: controlDia, paqList: paqList, registrarCorreccion: registrarCorreccion, construirCargas: construirCargas, comprobanteEntrega: comprobanteEntrega, comprobanteDia: comprobanteDia, generarReporte: function (r) { return generarReporte(r); }, playa: function () { return PL; } };
+window.__propinas = { get D() { return D; }, calc: calc, cajaDe: cajaDe, resumenSector: resumenSector, pendienteHasta: pendienteHasta, diasTrabajados: diasTrabajados, repartir: repartir, desglose: desglose, textoBilletes: textoBilletes, registrarEntrega: registrarEntrega, anularEntrega: anularEntrega, guardarEmpleado: guardarEmpleado, reporteDiario: reporteDiario, reportePeriodo: reportePeriodo, reporteEntrega: reporteEntrega, reportePaquetes: reportePaquetes, comprobanteEntrega: comprobanteEntrega, registrarRegalo: registrarRegalo, anularRegalo: anularRegalo, cumplesCerca: cumplesCerca, diasHastaCumple: diasHastaCumple, saldoCaja: saldoCaja, migrar: migrar, guardarAhora: guardarAhora, ir: ir, filasMovimientos: filasMovimientos, carpeta: function () { return CARP; }, escribirCarpeta: escribirCarpeta, nube: function () { return NUBE; }, subirNube: subirNube, registrarCarga: registrarCarga, registrarPaquete: registrarPaquete, arqueo: arqueo, anularPaquetes: anularPaquetes, csvTexto: csvTexto, unirDocs: unirDocs, turnoYFecha: function () { return turnoYFecha(); }, registrarObsPaquete: registrarObsPaquete, estadoPaq: estadoPaq, totalEfectivo: totalEfectivo, ticketPaquete: ticketPaquete, controlDia: controlDia, paqList: paqList, registrarCorreccion: registrarCorreccion, construirCargas: construirCargas, comprobanteEntrega: comprobanteEntrega, comprobanteDia: comprobanteDia, generarReporte: function (r) { return generarReporte(r); }, playa: function () { return PL; } };
 if (/^https?:$/.test(location.protocol)) document.body.classList.add('bloq');
-iniciarAlmacenamiento().then(function () { REV++; pie(); ir('inicio'); return carpetaIniciar().then(function () { pie(); if (ACT === 'inicio' || ACT === 'ajustes') refrescar(); }).then(nubeIniciar).then(function () { document.body.classList.remove('bloq'); menu(); pie(); if (esPlaya()) ir('playa'); else refrescar(); }); }).catch(function (e) { document.body.classList.remove('bloq'); guardadoOK = false; pie(); ir('inicio'); toast('No se pudieron leer los datos guardados: ' + e.message, 'err'); });
+/* Si algo del arranque se traba o falla, la pantalla nunca queda en blanco: se muestra la app y un aviso con el paso. */
+function destrabar(motivo) {
+  if (!document.body.classList.contains('bloq')) return;
+  document.body.classList.remove('bloq');
+  try { menu(); pie(); if (!ACT || !$('#view').innerHTML) ir('inicio'); } catch (e) { /* sigue */ }
+  toast(motivo, 'err');
+}
+setTimeout(function () { destrabar('La app tardó en arrancar (paso: ' + ARR.paso + (ARR.lentos.length ? '; no respondió: ' + ARR.lentos.join(', ') : '') + '). Si no ves tus datos, apretá Ctrl+F5.'); }, 20000);
+window.addEventListener('error', function (ev) { destrabar('Error al arrancar: ' + (ev && ev.message || 'desconocido') + '. Apretá Ctrl+F5; si sigue, mandá una captura.'); });
+window.addEventListener('unhandledrejection', function (ev) { destrabar('Error al arrancar: ' + (ev && ev.reason && ev.reason.message || 'desconocido') + '. Apretá Ctrl+F5.'); });
+ARR.paso = 'datos del navegador';
+iniciarAlmacenamiento().then(function () {
+  REV++; pie(); ir('inicio'); ARR.paso = 'carpeta de la PC';
+  return conTiempo(carpetaIniciar(), 8000, null, 'carpeta de la PC').then(function () {
+    if (ARR.lentos.indexOf('carpeta de la PC') >= 0 && CARP.h) { CARP.estado = 'permiso'; CARP.error = 'La carpeta no respondió al abrir'; }
+    pie(); if (ACT === 'inicio' || ACT === 'ajustes') refrescar(); ARR.paso = 'nube';
+  }).then(nubeIniciar).then(function () { ARR.paso = 'listo'; document.body.classList.remove('bloq'); menu(); pie(); if (esPlaya()) ir('playa'); else refrescar(); if (ARR.lentos.length) toast('Aviso: tardó en responder ' + ARR.lentos.join(', ') + '. Se siguió igual.', 'err'); });
+}).catch(function (e) { document.body.classList.remove('bloq'); guardadoOK = false; pie(); ir('inicio'); toast('No se pudieron leer los datos guardados: ' + e.message, 'err'); });
 })();
 </script>
 </body>
