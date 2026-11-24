@@ -2118,7 +2118,7 @@ function lin(n, c) { return '👤 ' + n + ': ' + $w(c); }
 function reporteDiario(o) {
   var por = {}, n = {};
   cargasDia(o.f).forEach(function (c) { por[c.p] = (por[c.p] || 0) + c.c; n[c.p] = (n[c.p] || 0) + 1; });
-  var ps = Object.keys(por).sort(function (a, b) { return emp(a).nombre.localeCompare(emp(b).nombre, 'es'); }), tot = ps.reduce(function (a, p) { return a + por[p]; }, 0);
+  var ps = Object.keys(por).sort(function (a, b) { return por[b] - por[a] || emp(a).nombre.localeCompare(emp(b).nombre, 'es'); }), tot = ps.reduce(function (a, p) { return a + por[p]; }, 0);
   var L = [cabEmpresa(), '📅 ' + diaNombre(o.f) + ' ' + dmy(o.f), '⛽ SECTOR PLAYA', ''];
   if (!ps.length) L.push('Sin propinas cargadas en el día.');
   if (o.detalle !== false) ps.forEach(function (p) { L.push(lin(emp(p).nombre, por[p])); });
@@ -2136,7 +2136,7 @@ function reportePeriodo(o, tipo) {
   secs.forEach(function (s) {
     var r = resumenSector(s, o.d, o.h), P = calc().P;
     var emps = Object.keys(P).map(function (k) { return P[k]; }).filter(function (e) { return e.s === s && e.cargas.some(function (c) { return enRango(c.f, o.d, o.h); }); })
-      .map(function (e) { return { e: e, hizo: propinasEmpleado(e.p, s, o.d, o.h) }; }).sort(function (a, b) { return emp(a.e.p).nombre.localeCompare(emp(b.e.p).nombre, 'es'); });
+      .map(function (e) { return { e: e, hizo: propinasEmpleado(e.p, s, o.d, o.h) }; }).sort(function (a, b) { return b.hizo - a.hizo || emp(a.e.p).nombre.localeCompare(emp(b.e.p).nombre, 'es'); }); // de mayor a menor propina
     if (!emps.length && !r.pendAntes) return;
     hay = true;
     var B = [cabEmpresa(), txtPer, '⛽ SECTOR ' + sec(s).nombre.toUpperCase(), ''];
@@ -2221,7 +2221,7 @@ function reportePaquetes(f, turno) {
       tot += sub; L.push('');
     });
   }
-  var ps = Object.keys(por).sort(function (a, b) { return String(nom[a]).localeCompare(String(nom[b]), 'es'); });
+  var ps = Object.keys(por).sort(function (a, b) { return por[b] - por[a] || String(nom[a]).localeCompare(String(nom[b]), 'es'); });
   if (ps.length && (!turno || qs.length > 1)) { L.push('👥 POR EMPLEADO'); ps.forEach(function (p) { L.push(lin(nom[p], por[p])); }); L.push(''); }
   L.push(LINEA, '💰 TOTAL ' + (turno ? 'DEL TURNO' : 'DEL DÍA') + ': ' + $w(tot));
   if (qs.length) L.push('📦 ' + qs.length + ' paquete' + (qs.length === 1 ? '' : 's') + ' · 👥 ' + ps.length + ' empleado' + (ps.length === 1 ? '' : 's'));
@@ -2356,8 +2356,8 @@ function pHistorial() {
 /* ===================================================================== EMPLEADOS */
 function pEmpleados() {
   var f = F.emp = F.emp || { est: 'activos' }; f.s = '';
-  cab('Empleados', D.empleados.filter(function (m) { return m.activo; }).length + ' activos · ' + D.empleados.filter(function (m) { return !m.activo; }).length + ' inactivos', '<button class="btn" id="bV">Agregar varios</button><button class="btn pri" id="bN">' + ico('cargar') + 'Nuevo empleado</button>');
-  $('#bN').onclick = function () { formEmpleado(null); }; $('#bV').onclick = agregarVarios;
+  cab('Empleados', D.empleados.filter(function (m) { return m.activo; }).length + ' activos · ' + D.empleados.filter(function (m) { return !m.activo; }).length + ' inactivos', '<button class="btn" id="bCum">🎂 Cargar cumpleaños</button><button class="btn" id="bV">Agregar varios</button><button class="btn pri" id="bN">' + ico('cargar') + 'Nuevo empleado</button>');
+  $('#bN').onclick = function () { formEmpleado(null); }; $('#bV').onclick = agregarVarios; $('#bCum').onclick = importarCumples;
   var sA = segmento('eA', [['activos', 'Activos'], ['inactivos', 'Inactivos'], ['todos', 'Todos']], f.est, function (v) { f.est = v; tabla(); });
   $('#view').innerHTML = '<div class="banner info">📅 <div>La <b>fecha de ingreso</b> se usa para el reparto proporcional: si alguien entró un miércoles, en esa semana cuenta de miércoles a domingo. Al dar de baja se pide la fecha de egreso.</div></div><div class="bar"><div class="f"><label>Estado</label>' + sA.html + '</div><div class="f grow"><label>Buscar</label><input id="eQ" placeholder="Nombre o legajo" value="' + esc(f.q || '') + '"></div></div><div id="eBody"></div>';
   sA.enganchar();
@@ -2381,6 +2381,47 @@ function pEmpleados() {
     });
   }
   tabla();
+}
+/** Pegar una lista (por ejemplo de Excel: Empresa · Colaborador · Cumpleaños dd/mm/aaaa) y cargar la fecha de nacimiento
+ *  solo a los empleados ACTIVOS de propinas. Los que no están en propinas se ignoran. */
+function normNombre(t) { return String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zñ ]/g, ' ').split(/\s+/).filter(function (x) { return x.length > 1; }); }
+function leerCumples(txt) {
+  return String(txt || '').split(/\r?\n/).map(function (l) {
+    var m = l.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/); if (!m) return null;
+    var a = Number(m[3]); if (a < 100) a += a > 30 ? 1900 : 2000;
+    var f = a + '-' + pad(Number(m[2])) + '-' + pad(Number(m[1])), d = dI(f);
+    if (isNaN(d) || isoLocal(d) !== f) return null;
+    var nombre = l.slice(0, m.index).replace(/\t/g, ' ').trim().replace(/^(srl|sa|s\.a\.|s\.r\.l\.)\s+/i, '');
+    return nombre ? { nombre: nombre, f: f } : null;
+  }).filter(Boolean);
+}
+function emparejarCumples(lista) {
+  var act = D.empleados.filter(function (m) { return m.activo; }), usados = {};
+  return act.map(function (m) {
+    var tm = normNombre(m.nombre), cand = lista.filter(function (x) { var tx = normNombre(x.nombre), corto = tm.length <= tx.length ? tm : tx, largo = corto === tm ? tx : tm; return corto.length >= 2 && corto.every(function (t) { return largo.indexOf(t) >= 0; }); });
+    return { m: m, x: cand.length === 1 ? cand[0] : null, varios: cand.length > 1 };
+  }).filter(function (r) { if (r.x && usados[r.x.nombre]) { r.x = null; r.varios = true; } if (r.x) usados[r.x.nombre] = 1; return true; });
+}
+function importarCumples() {
+  modal('🎂 Cargar cumpleaños', '<p class="small muted" style="margin-top:0">Pegá la lista tal cual (de Excel o del sistema de personal): nombre y fecha de nacimiento <b>dd/mm/aaaa</b> en cada renglón. Se carga <b>solo a los empleados activos de propinas</b>; los demás de la lista se ignoran.</p>' +
+    '<textarea id="icT" rows="8" style="width:100%;font-family:inherit;font-size:13px" placeholder="SRL	ALONSO Marcos	23/01/1977"></textarea><div id="icP" class="mt"></div>',
+    [{ t: 'Cancelar' }, { t: '🎂 Guardar cumpleaños', c: 'pri', fn: function (ov) {
+      var rs = emparejarCumples(leerCumples($('#icT', ov).value)).filter(function (r) { return r.x && r.m.nac !== r.x.f; });
+      if (!rs.length) throw new Error('No hay cumpleaños nuevos para cargar.');
+      rs.forEach(function (r) { var antes = r.m.nac || ''; r.m.nac = r.x.f; bitacora('EMPLEADO', r.m.nombre + ': cumpleaños ' + (antes ? dm(antes) : '—') + ' → ' + dm(r.x.f) + ' (lista pegada)'); });
+      guardar(); festejar(rs.length + ' cumpleaños cargados'); refrescar();
+    } }], 'lg');
+  setTimeout(function () {
+    var ovs = document.querySelectorAll('.ov'), ov = ovs[ovs.length - 1], ta = ov && $('#icT', ov); if (!ta) return;
+    ta.oninput = function () {
+      var l = leerCumples(ta.value), rs = emparejarCumples(l), ok = rs.filter(function (r) { return r.x; }), falta = rs.filter(function (r) { return !r.x; });
+      if (!l.length) { $('#icP', ov).innerHTML = ''; return; }
+      $('#icP', ov).innerHTML = '<div class="small" style="margin-bottom:6px"><b>' + l.length + '</b> renglones leídos · <b>' + ok.length + '</b> coinciden con empleados activos de propinas · ' + (l.length - ok.length) + ' se ignoran</div>' +
+        '<div class="tw" style="max-height:260px;overflow:auto"><table class="t"><thead><tr><th>Empleado en propinas</th><th>En la lista</th><th>Cumpleaños</th><th></th></tr></thead><tbody>' +
+        ok.map(function (r) { return '<tr><td>' + esc(r.m.nombre) + '</td><td class="small muted">' + esc(r.x.nombre) + '</td><td class="b">' + dmy(r.x.f) + '</td><td class="small">' + (r.m.nac === r.x.f ? '<span class="pill">ya estaba</span>' : r.m.nac ? '<span class="pill warn">cambia (' + dm(r.m.nac) + ')</span>' : '<span class="pill ok">nuevo</span>') + '</td></tr>'; }).join('') +
+        falta.map(function (r) { return '<tr><td>' + esc(r.m.nombre) + '</td><td colspan="3" class="small" style="color:#b45309">' + (r.varios ? 'Hay más de uno parecido en la lista: cargalo a mano' : 'No está en la lista') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+    };
+  }, 0);
 }
 function formEmpleado(m) {
   var nuevo = !m; m = m || { nombre: '', legajo: '', s: SEC, activo: true, alta: hoy(), baja: '' };
@@ -2463,7 +2504,7 @@ $('#fileRestore').onchange = function () {
 var PANT = { playa: pCargar, paquete: pPaquete, paquetes: pPaquetes, inicio: pInicio, cargar: pCargar, entregar: pEntregar, caja: pCaja, reportes: pReportes, historial: pHistorial, empleados: pEmpleados, ajustes: pAjustes };
 window.addEventListener('beforeunload', function (ev) { if (tG) guardarAhora(); if (sucio && sucio()) { ev.preventDefault(); ev.returnValue = ''; } });
 try { var bc = new BroadcastChannel('propinasBeraza'); bc.onmessage = function (ev) { if (ev.data === 'hola') bc.postMessage('ya'); else if (ev.data === 'ya') toast('El sistema ya está abierto en otra pestaña. Usá una sola para no pisar datos.', 'err'); }; bc.postMessage('hola'); } catch (e) { /* sin BroadcastChannel */ }
-window.__propinas = { get D() { return D; }, calc: calc, cajaDe: cajaDe, resumenSector: resumenSector, pendienteHasta: pendienteHasta, diasTrabajados: diasTrabajados, repartir: repartir, desglose: desglose, textoBilletes: textoBilletes, registrarEntrega: registrarEntrega, anularEntrega: anularEntrega, guardarEmpleado: guardarEmpleado, reporteDiario: reporteDiario, reportePeriodo: reportePeriodo, reporteEntrega: reporteEntrega, reportePaquetes: reportePaquetes, comprobanteEntrega: comprobanteEntrega, registrarRegalo: registrarRegalo, anularRegalo: anularRegalo, cumplesCerca: cumplesCerca, diasHastaCumple: diasHastaCumple, saldoCaja: saldoCaja, migrar: migrar, guardarAhora: guardarAhora, ir: ir, filasMovimientos: filasMovimientos, carpeta: function () { return CARP; }, escribirCarpeta: escribirCarpeta, nube: function () { return NUBE; }, subirNube: subirNube, registrarCarga: registrarCarga, registrarPaquete: registrarPaquete, arqueo: arqueo, anularPaquetes: anularPaquetes, csvTexto: csvTexto, unirDocs: unirDocs, turnoYFecha: function () { return turnoYFecha(); }, registrarObsPaquete: registrarObsPaquete, estadoPaq: estadoPaq, totalEfectivo: totalEfectivo, ticketPaquete: ticketPaquete, controlDia: controlDia, paqList: paqList, registrarCorreccion: registrarCorreccion, construirCargas: construirCargas, comprobanteEntrega: comprobanteEntrega, comprobanteDia: comprobanteDia, generarReporte: function (r) { return generarReporte(r); }, playa: function () { return PL; } };
+window.__propinas = { get D() { return D; }, calc: calc, cajaDe: cajaDe, resumenSector: resumenSector, pendienteHasta: pendienteHasta, diasTrabajados: diasTrabajados, repartir: repartir, desglose: desglose, textoBilletes: textoBilletes, registrarEntrega: registrarEntrega, anularEntrega: anularEntrega, guardarEmpleado: guardarEmpleado, reporteDiario: reporteDiario, reportePeriodo: reportePeriodo, reporteEntrega: reporteEntrega, reportePaquetes: reportePaquetes, comprobanteEntrega: comprobanteEntrega, registrarRegalo: registrarRegalo, leerCumples: leerCumples, emparejarCumples: emparejarCumples, anularRegalo: anularRegalo, cumplesCerca: cumplesCerca, diasHastaCumple: diasHastaCumple, saldoCaja: saldoCaja, migrar: migrar, guardarAhora: guardarAhora, ir: ir, filasMovimientos: filasMovimientos, carpeta: function () { return CARP; }, escribirCarpeta: escribirCarpeta, nube: function () { return NUBE; }, subirNube: subirNube, registrarCarga: registrarCarga, registrarPaquete: registrarPaquete, arqueo: arqueo, anularPaquetes: anularPaquetes, csvTexto: csvTexto, unirDocs: unirDocs, turnoYFecha: function () { return turnoYFecha(); }, registrarObsPaquete: registrarObsPaquete, estadoPaq: estadoPaq, totalEfectivo: totalEfectivo, ticketPaquete: ticketPaquete, controlDia: controlDia, paqList: paqList, registrarCorreccion: registrarCorreccion, construirCargas: construirCargas, comprobanteEntrega: comprobanteEntrega, comprobanteDia: comprobanteDia, generarReporte: function (r) { return generarReporte(r); }, playa: function () { return PL; } };
 if (/^https?:$/.test(location.protocol)) document.body.classList.add('bloq');
 /* Si algo del arranque se traba o falla, la pantalla nunca queda en blanco: se muestra la app y un aviso con el paso. */
 function destrabar(motivo) {
